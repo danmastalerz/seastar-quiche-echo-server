@@ -1,0 +1,1 @@
+c++ quiche_echo_server.cc `pkg-config --cflags --libs --static seastar` -I../include /home/danielmastalerz/Pulpit/zpp/quiche/quiche/examples/build/debug/libquiche.a -lev -ldl -pthread -lm

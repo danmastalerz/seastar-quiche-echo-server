@@ -46,6 +46,7 @@ list(APPEND
      SERVER_SRC
         src/quiche_echo_server.cc
         src/server/server.cc
+        src/quic_connection/quic_connection.cc
 )
 add_executable(echo_server ${SERVER_SRC})
 target_include_directories(echo_server PRIVATE ${INCLUDE_DIRS})

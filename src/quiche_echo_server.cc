@@ -14,7 +14,6 @@ seastar::future<> submit_to_cores(std::uint16_t port, std::string &cert, std::st
                   Server server(port);
                   server.server_setup_config(cert, key);
                   return seastar::do_with(std::move(server), [] (Server &server) {
-                      std::cerr << "Running server service_loop...\n";
                       return server.service_loop();
                   });
               });

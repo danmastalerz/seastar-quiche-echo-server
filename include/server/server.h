@@ -8,19 +8,41 @@
 
 using namespace seastar::net;
 
+struct quic_header_info {
+    uint8_t type{};
+    uint32_t version{};
+
+    uint8_t scid[QUICHE_MAX_CONN_ID_LEN]{};
+    size_t scid_len = sizeof(scid);
+
+    uint8_t dcid[QUICHE_MAX_CONN_ID_LEN]{};
+    size_t dcid_len = sizeof(dcid);
+
+    uint8_t odcid[QUICHE_MAX_CONN_ID_LEN]{};
+    size_t odcid_len = sizeof(odcid);
+
+    uint8_t token[MAX_TOKEN_LEN]{};
+    size_t token_len = sizeof(token);
+};
+
 class Server {
 private:
     udp_channel channel;
     quiche_config *config;
     std::map<std::vector<uint8_t>, conn_io *> clients;
 
+    static int read_header_info(uint8_t *buf, size_t buf_size, quic_header_info *info);
     seastar::future<> handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagram &dgram);
     seastar::future<> send_data(struct conn_io *conn_data, udp_channel &chan, udp_datagram &dgram);
 
-public:
-    Server(std::uint16_t port);
+    seastar::future<> handle_non_established_connection(struct quic_header_info *info, udp_datagram &datagram);
+    seastar::future<> negotiate_version(struct quic_header_info *info, udp_datagram &datagram);
+    seastar::future<> quic_retry(struct quic_header_info *info, udp_datagram &datagram);
 
-    void setup_config(std::string &cert, std::string &key);
+public:
+    explicit Server(std::uint16_t port);
+
+    void server_setup_config(std::string &cert, std::string &key);
     seastar::future<> service_loop();
 
 };

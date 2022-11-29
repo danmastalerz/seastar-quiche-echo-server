@@ -10,6 +10,8 @@
 #include <vector>
 #include <map>
 #include <iostream>
+#include <unistd.h>
+#include <fcntl.h>
 
 #define LOCAL_CONN_ID_LEN 16
 
@@ -28,37 +30,11 @@ struct conn_io {
     socklen_t peer_addr_len;
 };
 
-void setup_config(quiche_config **config, const std::string &cert, const std::string &key) {
-    *config = quiche_config_new(QUICHE_PROTOCOL_VERSION);
-    if (*config == NULL) {
-        fprintf(stderr, "failed to create config\n");
-        exit(1);
-    }
+void setup_config(quiche_config **config, const std::string &cert, const std::string &key);
 
-    quiche_config_load_cert_chain_from_pem_file(*config, cert.c_str());
-    quiche_config_load_priv_key_from_pem_file(*config, key.c_str());
-
-    quiche_config_set_application_protos(*config,
-                                         (uint8_t *) "\x0ahq-interop\x05hq-29\x05hq-28\x05hq-27\x08http/0.9", 38);
-
-    quiche_config_set_max_idle_timeout(*config, 5000);
-    quiche_config_set_max_recv_udp_payload_size(*config, MAX_DATAGRAM_SIZE);
-    quiche_config_set_max_send_udp_payload_size(*config, MAX_DATAGRAM_SIZE);
-    quiche_config_set_initial_max_data(*config, 10000000);
-    quiche_config_set_initial_max_stream_data_bidi_local(*config, 1000000);
-    quiche_config_set_initial_max_stream_data_bidi_remote(*config, 1000000);
-    quiche_config_set_initial_max_streams_bidi(*config, 100);
-    quiche_config_set_cc_algorithm(*config, QUICHE_CC_RENO);
-
-    if (*config == NULL) {
-        std::cout << "Failed to create quiche confiassag" << std::endl;
-
-    }
-}
-
-void setup_config(quiche_config **config) {
-    setup_config(config, "./cert.crt", "./cert.key");
-}
+//void setup_config(quiche_config **config) {
+//    setup_config(config, "./cert.crt", "./cert.key");
+//}
 
 static void mint_token(const uint8_t *dcid, size_t dcid_len,
                        struct sockaddr_storage *addr, socklen_t addr_len,

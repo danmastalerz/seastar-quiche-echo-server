@@ -281,10 +281,13 @@ int main(int argc, char **argv) {
     seastar::app_template app;
 
     namespace po = boost::program_options;
+    app.add_options()
+            ("port", po::value<std::uint16_t>()->default_value(1234), "server port");
 
     try {
         app.run(argc, argv, [&]() {
             auto &&config = app.configuration();
+            port = config["port"].as<std::uint16_t>();
             return f();
         });
     } catch (...) {

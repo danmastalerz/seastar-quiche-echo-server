@@ -1,8 +1,12 @@
 #ifndef SEASTAR_QUICHE_ECHO_DEMO_QUICHECONNECTION_H
 #define SEASTAR_QUICHE_ECHO_DEMO_QUICHECONNECTION_H
 
+namespace zpp {
+
 class quiche_connection {
 
 };
+
+} // namespace zpp
 
 #endif //SEASTAR_QUICHE_ECHO_DEMO_QUICHECONNECTION_H

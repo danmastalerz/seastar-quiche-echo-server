@@ -7,6 +7,10 @@
 #include "seastar/net/api.hh"
 #include <server/server.h>
 
+#include <logger.h>
+
+using namespace zpp;
+
 seastar::future<> submit_to_cores(std::uint16_t port, std::string &cert, std::string &key) {
     return seastar::parallel_for_each(boost::irange<unsigned>(0, seastar::smp::count),
           [port, &cert, &key](unsigned core) {
@@ -14,7 +18,7 @@ seastar::future<> submit_to_cores(std::uint16_t port, std::string &cert, std::st
                   Server server(port);
                   server.server_setup_config(cert, key);
                   return seastar::do_with(std::move(server), [] (Server &server) {
-                      std::cerr << "Running server service_loop...\n";
+                      eflog("Running server service_loop...");
                       return server.service_loop();
                   });
               });
@@ -43,9 +47,7 @@ int main(int argc, char **argv) {
             });
         });
     } catch (...) {
-        std::cerr << "Couldn't start application: "
-                  << std::current_exception() << "\n";
-        return 1;
+        ffail("Couldn't start application: ", std::current_exception());
     }
     return 0;
 }

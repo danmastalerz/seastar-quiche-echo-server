@@ -24,25 +24,22 @@
 #include <seastar/util/log.hh>
 #include <seastar/core/iostream.hh>
 
-#define LOCAL_CONN_ID_LEN 16
+constexpr std::size_t LOCAL_CONN_ID_LEN = 16ULL;
 
-#define MAX_DATAGRAM_SIZE 1350
+constexpr char const *const host = "127.0.0.1";
+constexpr std::uint16_t port = 1234;
 
-const char *host = "127.0.0.1";
-uint16_t port = 1234;
+using namespace seastar::net;
+using namespace zpp;
 
 seastar::future<> x = seastar::make_ready_future<>();
 
-using namespace seastar::net;
-
-
-seastar::future<> send_data(struct conn_io &conn_data, udp_channel &chan, seastar::ipv4_addr &addr) {
-    uint8_t out[MAX_DATAGRAM_SIZE];
+seastar::future<> send_data(conn_io &conn_data, udp_channel &chan, seastar::ipv4_addr &addr) {
+    std::uint8_t out[MAX_DATAGRAM_SIZE];
 
     quiche_send_info send_info;
 
     while (true) {
-
         ssize_t written = quiche_conn_send(conn_data.conn, out, sizeof(out),
                                            &send_info);
 
@@ -51,11 +48,10 @@ seastar::future<> send_data(struct conn_io &conn_data, udp_channel &chan, seasta
         }
 
         if (written < 0) {
-            fprintf(stderr, "failed to create packet: %zd\n", written);
-            exit(1);
+            ffail("Failed to create a packet: ", written);
         }
 
-        std::cout << "sending " << written << " bytes" << std::endl;
+        flog("Sending ", written, " bytes");
 
         x = chan.send(addr,
                       seastar::temporary_buffer<char>(reinterpret_cast<const char *>(out), written));
@@ -69,7 +65,7 @@ static bool echo_received = true;
 
 
 seastar::future<>
-handle_connection(uint8_t *buf, ssize_t read, struct conn_io *conn_io, udp_channel &channel, udp_datagram &datagram,
+handle_connection(std::uint8_t *buf, ssize_t read, conn_io *conn_io, udp_channel &channel, udp_datagram &datagram,
                   seastar::ipv4_addr &addr) {
 
 
@@ -81,31 +77,28 @@ handle_connection(uint8_t *buf, ssize_t read, struct conn_io *conn_io, udp_chann
 
 
     if (read < 0) {
-
-        perror("failed to read");
+        eflog("Failed to read");
         return seastar::make_ready_future<>();
     }
 
     quiche_recv_info recv_info = {
-            (struct sockaddr *) &peer_addr,
+            reinterpret_cast<sockaddr*>(std::addressof(peer_addr)),
             peer_addr_len,
-
-            (struct sockaddr *) &local_addr,
+            reinterpret_cast<sockaddr*>(std::addressof(local_addr)),
             local_addr_len,
 
     };
 
     ssize_t done = quiche_conn_recv(conn_io->conn, buf, read, &recv_info);
 
-
     if (done < 0) {
-        fprintf(stderr, "failed to process packet\n");
+        eflog("Failed to process packet");
         return seastar::make_ready_future<>();
     }
 
 
     if (quiche_conn_is_closed(conn_io->conn)) {
-        fprintf(stderr, "connection closed\n");
+        eflog("Connection closed");
         return seastar::make_ready_future<>();
     }
 
@@ -115,7 +108,7 @@ handle_connection(uint8_t *buf, ssize_t read, struct conn_io *conn_io, udp_chann
         quiche_stream_iter *readable = quiche_conn_readable(conn_io->conn);
 
         while (quiche_stream_iter_next(readable, &s)) {
-            fprintf(stderr, "stream %" PRIu64 " is readable\n", s);
+            eflog("Stream ", s, " is readable");
 
             bool fin = false;
             ssize_t recv_len = quiche_conn_stream_recv(conn_io->conn, s,
@@ -130,7 +123,7 @@ handle_connection(uint8_t *buf, ssize_t read, struct conn_io *conn_io, udp_chann
 
             if (fin) {
                 if (quiche_conn_close(conn_io->conn, true, 0, nullptr, 0) < 0) {
-                    fprintf(stderr, "failed to close connection\n");
+                    eflog("Failed to close connection");
                 }
             }
         }
@@ -202,30 +195,29 @@ seastar::future<> client_loop() {
         quiche_config_log_keys(config);
     }
 
-    uint8_t scid[LOCAL_CONN_ID_LEN];
+    std::uint8_t scid[LOCAL_CONN_ID_LEN];
     int rng = open("/dev/urandom", O_RDONLY);
     if (rng < 0) {
-        perror("failed to open /dev/urandom");
+        eflog("Failed to open /dev/urandom");
         return seastar::make_ready_future<>();
     }
 
     ssize_t rand_len = read(rng, &scid, sizeof(scid));
     if (rand_len < 0) {
-        perror("failed to create connection ID");
+        eflog("Failed to create connection ID");
         return seastar::make_ready_future<>();
     }
 
-    struct conn_io *conn_data = nullptr;
-    conn_data = (conn_io *) calloc(1, sizeof(conn_io));
+    conn_io *conn_data = reinterpret_cast<conn_io*>(calloc(1, sizeof(conn_io)));
 
     if (conn_data == nullptr) {
-        fprintf(stderr, "failed to allocate connection IO\n");
+        eflog("Failed to allocate connection IO");
         return seastar::make_ready_future<>();
     }
 
     return seastar::do_with(seastar::make_udp_channel(), seastar::ipv4_addr(host, port),
                             [&config, &scid](udp_channel &channel, seastar::ipv4_addr &addr) {
-                                std::cout << "starting do_with" << std::endl;
+                                flog("Starting do_with");
                                 sockaddr local_addr = channel.local_address().as_posix_sockaddr();
                                 socklen_t local_addr_len = sizeof(local_addr);
 
@@ -234,23 +226,28 @@ seastar::future<> client_loop() {
                                 sockaddr peer_addr = dest.as_posix_sockaddr();
                                 socklen_t peer_addr_len = sizeof(peer_addr);
 
-                                struct conn_io *conn_data = nullptr;
-                                conn_data = (conn_io *) calloc(1, sizeof(conn_io));
+                                conn_io *conn_data = reinterpret_cast<conn_io*>(calloc(1, sizeof(conn_io)));
                                 if (conn_data == nullptr) {
-                                    fprintf(stderr, "failed to allocate connection IO\n");
+                                    eflog("Failed to allocate connection IO");
                                 }
 
-                                quiche_conn *conn = quiche_connect(host, (const uint8_t *) scid, sizeof(scid),
-                                                                   (struct sockaddr *) &local_addr,
-                                                                   local_addr_len,
-                                                                   (struct sockaddr *) &peer_addr, peer_addr_len,
-                                                                   config);
+                                quiche_conn *conn = quiche_connect(
+                                    host,
+                                    reinterpret_cast<const std::uint8_t*>(scid),
+                                    sizeof(scid),
+                                    reinterpret_cast<sockaddr*>(std::addressof(local_addr)),
+                                    local_addr_len,
+                                    reinterpret_cast<sockaddr*>(std::addressof(peer_addr)),
+                                    peer_addr_len,
+                                    config
+                                );
+                                
                                 if (conn == nullptr) {
-                                    fprintf(stderr, "failed to create connection\n");
+                                    eflog("Failed to create connection");
                                 }
                                 conn_data->conn = conn;
 
-                                memcpy(&conn_data->peer_addr, &peer_addr, peer_addr_len);
+                                std::memcpy(&conn_data->peer_addr, &peer_addr, peer_addr_len);
                                 conn_data->peer_addr_len = peer_addr_len;
 
                                 using namespace std::chrono_literals;
@@ -291,8 +288,7 @@ int main(int argc, char **argv) {
             return f();
         });
     } catch (...) {
-        std::cerr << "Couldn't start application: " << std::current_exception() << '\n';
-        return 1;
+        ffail("Couldn't start application: ", std::current_exception());
     }
     return 0;
 }

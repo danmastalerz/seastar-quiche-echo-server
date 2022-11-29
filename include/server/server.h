@@ -30,14 +30,18 @@ private:
     udp_channel channel;
     quiche_config *config;
     std::map<std::vector<uint8_t>, conn_io *> clients;
+    uint8_t receive_buffer[MAX_DATAGRAM_SIZE]{};
+    ssize_t receive_len;
 
     static int read_header_info(uint8_t *buf, size_t buf_size, quic_header_info *info);
-    seastar::future<> handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagram &dgram);
+    seastar::future<> handle_connection(udp_datagram &dgram);
     seastar::future<> send_data(struct conn_io *conn_data, udp_channel &chan, udp_datagram &dgram);
 
-    seastar::future<> handle_non_established_connection(struct quic_header_info *info, udp_datagram &datagram);
+    seastar::future<> handle_pre_hs_connection(struct quic_header_info *info, udp_datagram &datagram);
     seastar::future<> negotiate_version(struct quic_header_info *info, udp_datagram &datagram);
     seastar::future<> quic_retry(struct quic_header_info *info, udp_datagram &datagram);
+
+    seastar::future<> handle_post_hs_connection(struct conn_io *conn_io, udp_datagram &datagram);
 
 public:
     explicit Server(std::uint16_t port);

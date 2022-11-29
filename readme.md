@@ -12,7 +12,7 @@ There's script called "build.sh" with which I've been compilling the code, you c
 ## Cmake
 Specify environment variable `QUICHE_LIB_HOME` pointing to home directory of quiche located on your machine.
 ```
-export QUICH_LIB_HOME=<path_to_quiche>
+export QUICHE_LIB_HOME=<path_to_quiche>
 ```
 Then simply run:
 ```

@@ -31,7 +31,9 @@ void setup_config(quiche_config **config, const std::string &cert, const std::st
 Server::Server(std::uint16_t port) :
         channel(seastar::make_udp_channel(port)),
         config(nullptr),
-        clients() {}
+        clients(),
+        receive_buffer(),
+        receive_len() {}
 
 void Server::server_setup_config(std::string &cert, std::string &key) {
     setup_config(&config, cert, key);
@@ -48,32 +50,23 @@ seastar::future<> Server::service_loop() {
     return seastar::keep_doing([this] () {
         return channel.receive().then([this](udp_datagram dgram) {
             // Convert seastar udp datagram into raw data
-            uint8_t buffer[MAX_DATAGRAM_SIZE];
             auto fragment_array = dgram.get_data().fragment_array();
-            memcpy(buffer, fragment_array->base, fragment_array->size);
+            memcpy(receive_buffer, fragment_array->base, fragment_array->size);
+            receive_len = dgram.get_data().len();
+            receive_buffer[receive_len] = '\0';
 
             // Feed the raw data into quiché and handle the connection
-            return handle_connection(buffer, fragment_array->size, channel, dgram);
+            return handle_connection(dgram);
         });
     });
 
 }
 
-seastar::future<> Server::handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagram &dgram) {
-    struct conn_io *conn_io = nullptr;
+seastar::future<> Server::handle_connection(udp_datagram &datagram) {
 
     struct quic_header_info header_info{};
 
-    sockaddr addr = dgram.get_src().as_posix_sockaddr();
-    socklen_t addr_len = sizeof(addr);
-
-    auto* peer_addr = (struct sockaddr_storage*) &addr;
-    socklen_t peer_addr_len = addr_len;
-
-    sockaddr local_addr = dgram.get_dst().as_posix_sockaddr();
-    socklen_t local_addr_len = sizeof(local_addr);
-
-    int rc = read_header_info(buf, read, &header_info);
+    int rc = read_header_info(receive_buffer, receive_len, &header_info);
     if (rc < 0) {
         fprintf(stderr, "failed to parse header: %d\n", rc);
         return seastar::make_ready_future<>();
@@ -82,56 +75,11 @@ seastar::future<> Server::handle_connection(uint8_t *buf, ssize_t read, udp_chan
 
     if (clients.find(map_key) == clients.end()) {
         std::cerr << "NON_ESTABLISHED_CONNECTION...\n";
-        return handle_non_established_connection(&header_info, dgram);
+        return handle_pre_hs_connection(&header_info, datagram);
     }
 
-    conn_io = clients[map_key];
-
-    quiche_recv_info recv_info = {
-            (struct sockaddr *) peer_addr,
-            peer_addr_len,
-            (struct sockaddr *) &local_addr,
-            local_addr_len,
-    };
-
-    ssize_t done = quiche_conn_recv(conn_io->conn, buf, read, &recv_info);
-    if (done < 0) {
-        std::cerr << "failed to process packet: " << done << "\n";
-        return seastar::make_ready_future<>();
-    }
-
-    if (quiche_conn_is_established(conn_io->conn)) {
-        uint64_t s = 0;
-
-        quiche_stream_iter *readable = quiche_conn_readable(conn_io->conn);
-
-        while (quiche_stream_iter_next(readable, &s)) {
-            fprintf(stderr, "stream %" PRIu64 " is readable\n", s);
-
-            bool fin = false;
-            ssize_t recv_len = quiche_conn_stream_recv(conn_io->conn, s,
-                                                       buf, sizeof(buf),
-                                                       &fin);
-
-            if (recv_len < 0) {
-                break;
-            }
-
-            fprintf(stderr, "Received: %s\n", buf);
-
-            quiche_conn_stream_send(conn_io->conn, s, buf, recv_len, false);
-
-            if (fin) {
-                static const char *resp = "Stream finished.\n";
-                quiche_conn_stream_send(conn_io->conn, s, (uint8_t *) resp,
-                                        5, true);
-            }
-        }
-
-        quiche_stream_iter_free(readable);
-    }
-
-    return send_data(conn_io, chan, dgram);
+    struct conn_io *conn_io = clients[map_key];
+    return handle_post_hs_connection(conn_io, datagram);
 }
 
 
@@ -142,7 +90,7 @@ int Server::read_header_info(uint8_t *buf, size_t buf_size, quic_header_info *in
 }
 
 
-seastar::future<> Server::handle_non_established_connection(struct quic_header_info *info, udp_datagram &datagram) {
+seastar::future<> Server::handle_pre_hs_connection(struct quic_header_info *info, udp_datagram &datagram) {
 
 
     if (!quiche_version_is_supported(info->version)) {
@@ -180,7 +128,7 @@ seastar::future<> Server::handle_non_established_connection(struct quic_header_i
         std::cout << "failed to create connection\n";
     }
 
-    return seastar::make_ready_future<>();
+    return handle_post_hs_connection(conn_io, datagram);
 }
 
 seastar::future<> Server::negotiate_version(struct quic_header_info *info, udp_datagram &datagram) {
@@ -201,7 +149,7 @@ seastar::future<> Server::negotiate_version(struct quic_header_info *info, udp_d
 
 
 seastar::future<> Server::quic_retry(quic_header_info *info, udp_datagram &datagram) {
-    char out[MAX_DATAGRAM_SIZE];
+    static char out[MAX_DATAGRAM_SIZE];
 
     sockaddr addr = datagram.get_src().as_posix_sockaddr();
     socklen_t addr_len = sizeof(addr);
@@ -230,6 +178,63 @@ seastar::future<> Server::quic_retry(quic_header_info *info, udp_datagram &datag
     }
 
     return channel.send(datagram.get_src(), seastar::temporary_buffer<char>(out, written));
+}
+
+seastar::future<> Server::handle_post_hs_connection(struct conn_io *conn_io, udp_datagram &datagram) {
+    sockaddr addr = datagram.get_src().as_posix_sockaddr();
+    socklen_t addr_len = sizeof(addr);
+
+    auto* peer_addr = (struct sockaddr_storage*) &addr;
+    socklen_t peer_addr_len = addr_len;
+
+    sockaddr local_addr = datagram.get_dst().as_posix_sockaddr();
+    socklen_t local_addr_len = sizeof(local_addr);
+
+    quiche_recv_info recv_info = {
+            (struct sockaddr *) peer_addr,
+            peer_addr_len,
+            (struct sockaddr *) &local_addr,
+            local_addr_len,
+    };
+
+    ssize_t done = quiche_conn_recv(conn_io->conn, receive_buffer, receive_len, &recv_info);
+    if (done < 0) {
+        std::cerr << "failed to process packet: " << done << "\n";
+        return seastar::make_ready_future<>();
+    }
+
+    if (quiche_conn_is_established(conn_io->conn)) {
+        uint64_t s = 0;
+
+        quiche_stream_iter *readable = quiche_conn_readable(conn_io->conn);
+
+        while (quiche_stream_iter_next(readable, &s)) {
+            fprintf(stderr, "stream %" PRIu64 " is readable\n", s);
+
+            bool fin = false;
+            receive_len = quiche_conn_stream_recv(conn_io->conn, s,
+                                                       receive_buffer, sizeof(receive_buffer),
+                                                       &fin);
+
+            if (receive_len < 0) {
+                break;
+            }
+
+            fprintf(stderr, "Received: %s\n", receive_buffer);
+
+            quiche_conn_stream_send(conn_io->conn, s, receive_buffer, receive_len, false);
+
+            if (fin) {
+                static const char *resp = "Stream finished.\n";
+                quiche_conn_stream_send(conn_io->conn, s, (uint8_t *) resp,
+                                        5, true);
+            }
+        }
+
+        quiche_stream_iter_free(readable);
+    }
+
+    return send_data(conn_io, channel, datagram);
 }
 
 seastar::future<> Server::send_data(struct conn_io *conn_data, udp_channel &chan, udp_datagram &dgram) {

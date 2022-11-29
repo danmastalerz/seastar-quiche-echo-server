@@ -6,9 +6,10 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/sleep.hh>
 #include "seastar/net/api.hh"
-#include "quiche.h"
-#include "quiche_utils.h"
-#include <inttypes.h>
+#include <quiche.h>
+#include <quiche_utils.h>
+#include <cinttypes>
+#include <server/server.h>
 
 using namespace seastar;
 using namespace net;
@@ -18,7 +19,7 @@ extern seastar::future<> f();
 
 seastar::future<> start_quiche_server();
 
-void handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagram &dgram);
+seastar::future<> handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagram &dgram);
 
 static const int port = 1234;
 static quiche_config *config = NULL;
@@ -40,7 +41,7 @@ seastar::future<> start_quiche_server() {
     // Set up quiche.
     setup_config(&config);
 
-    if (config == NULL) {
+    if (config == nullptr) {
         std::cout << "Failed to create quiche config" << std::endl;
         return seastar::make_ready_future<>();
     }
@@ -55,7 +56,7 @@ seastar::future<> start_quiche_server() {
                 memcpy(buffer, fragment_array->base, fragment_array->size);
 
                 // Feed the raw data into quiche and handle the connection
-                handle_connection(buffer, fragment_array->size, chan, dgram);
+                return handle_connection(buffer, fragment_array->size, chan, dgram);
 
             });
         });
@@ -67,7 +68,7 @@ static void send_data(struct conn_io *conn_data, udp_channel &chan, udp_datagram
 
     quiche_send_info send_info;
 
-    while (1) {
+    while (true) {
         ssize_t written = quiche_conn_send(conn_data->conn, out, sizeof(out),
                                            &send_info);
 
@@ -86,7 +87,7 @@ static void send_data(struct conn_io *conn_data, udp_channel &chan, udp_datagram
     }
 }
 
-void handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagram &dgram) {
+seastar::future<> handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagram &dgram) {
     struct conn_io *conn_io = NULL;
 
     static char out[MAX_DATAGRAM_SIZE];
@@ -123,7 +124,7 @@ void handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagr
                                 token, &token_len);
     if (rc < 0) {
         fprintf(stderr, "failed to parse header: %d\n", rc);
-        return;
+        return seastar::make_ready_future<>();
     }
     std::vector<uint8_t> map_key(dcid, dcid + dcid_len);
     if (clients.find(map_key) == clients.end()) {
@@ -136,11 +137,10 @@ void handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagr
             if (written < 0) {
                 fprintf(stderr, "failed to create vneg packet: %zd\n",
                         written);
-                return;
+                return seastar::make_ready_future<>();
             }
 
-            (void) chan.send(dgram.get_src(), seastar::temporary_buffer<char>(out, written));
-            return;
+            return chan.send(dgram.get_src(), seastar::temporary_buffer<char>(out, written));
         }
 
         if (token_len == 0) {
@@ -151,8 +151,8 @@ void handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagr
 
             uint8_t new_cid[LOCAL_CONN_ID_LEN];
 
-            if (gen_cid(new_cid, LOCAL_CONN_ID_LEN) == NULL) {
-                return;
+            if (gen_cid(new_cid, LOCAL_CONN_ID_LEN) == nullptr) {
+                return seastar::make_ready_future<>();
             }
 
             ssize_t written = quiche_retry(scid, scid_len,
@@ -164,19 +164,17 @@ void handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagr
             if (written < 0) {
                 fprintf(stderr, "failed to create retry packet: %zd\n",
                         written);
-                return;
+                return seastar::make_ready_future<>();
             }
 
-            (void) chan.send(dgram.get_src(), seastar::temporary_buffer<char>(out, written));
-
-            return;
+            return chan.send(dgram.get_src(), seastar::temporary_buffer<char>(out, written));
         }
 
 
         if (!validate_token(token, token_len, peer_addr, peer_addr_len,
                             odcid, &odcid_len)) {
             fprintf(stderr, "invalid address validation token\n");
-            return;
+            return seastar::make_ready_future<>();
         }
 
         conn_io = create_conn(dcid, dcid_len, odcid, odcid_len,
@@ -185,7 +183,7 @@ void handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagr
 
         if (conn_io == NULL) {
             std::cout << "failed to create connection\n";
-            return;
+            return seastar::make_ready_future<>();
         }
     }
     else {
@@ -200,7 +198,7 @@ void handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagr
     ssize_t done = quiche_conn_recv(conn_io->conn, buf, read, &recv_info);
     if (done < 0) {
         fprintf(stderr, "failed to process packet: %zd\n", done);
-        return;
+        return seastar::make_ready_future<>();
     }
 
 
@@ -239,10 +237,39 @@ void handle_connection(uint8_t *buf, ssize_t read, udp_channel &chan, udp_datagr
     send_data(conn_io, chan, dgram);
 }
 
+seastar::future<> submit_to_cores(std::uint16_t port, std::string &cert, std::string &key) {
+    return seastar::parallel_for_each(boost::irange<unsigned>(0, seastar::smp::count),
+          [port, &cert, &key](unsigned core) {
+              return seastar::smp::submit_to(core, [port, &cert, &key] {
+                  Server server(port, cert, key);
+                  return seastar::do_with(std::move(server), [] (Server &server) {
+                      return server.service_loop();
+                  });
+              });
+          });
+}
+
 int main(int argc, char **argv) {
     seastar::app_template app;
+
+    namespace po = boost::program_options;
+    app.add_options()
+            ("port", po::value<std::uint16_t>()->default_value(1234), "listen port")
+            ("cert", po::value<std::string>()->default_value("./cert.crt"), "certificate")
+            ("key", po::value<std::string>()->default_value("./cert.key"), "key");
+
     try {
-        app.run(argc, argv, f);
+        app.run(argc, argv, [&] () {
+            auto &&config = app.configuration();
+            std::uint16_t port = config["port"].as<std::uint16_t>();
+            std::string cert = config["cert"].as<std::string>();
+            std::string key = config["key"].as<std::string>();
+
+            return seastar::do_with(port, std::move(cert), std::move(key),
+                                    [] (auto &port, auto &cert, auto &key) {
+               return submit_to_cores(port, cert, key);
+            });
+        });
     } catch (...) {
         std::cerr << "Couldn't start application: "
                   << std::current_exception() << "\n";

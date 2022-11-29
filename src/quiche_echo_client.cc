@@ -8,8 +8,8 @@
 #include <sys/socket.h>
 #include <netdb.h>
 
-#include "quiche.h"
-#include "quiche_utils.h"
+#include <quiche.h>
+#include <quiche_utils.h>
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>

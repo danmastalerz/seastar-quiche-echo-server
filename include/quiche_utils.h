@@ -6,9 +6,7 @@
 #define SEASTAR_QUICHE_UTILS_H
 
 #include "quiche.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstring>
 #include <vector>
 #include <map>
 #include <iostream>
@@ -30,16 +28,15 @@ struct conn_io {
     socklen_t peer_addr_len;
 };
 
-
-void setup_config(quiche_config **config) {
+void setup_config(quiche_config **config, const std::string &cert, const std::string &key) {
     *config = quiche_config_new(QUICHE_PROTOCOL_VERSION);
     if (*config == NULL) {
         fprintf(stderr, "failed to create config\n");
         exit(1);
     }
 
-    quiche_config_load_cert_chain_from_pem_file(*config, "./cert.crt");
-    quiche_config_load_priv_key_from_pem_file(*config, "./cert.key");
+    quiche_config_load_cert_chain_from_pem_file(*config, cert.c_str());
+    quiche_config_load_priv_key_from_pem_file(*config, key.c_str());
 
     quiche_config_set_application_protos(*config,
                                          (uint8_t *) "\x0ahq-interop\x05hq-29\x05hq-28\x05hq-27\x08http/0.9", 38);
@@ -57,6 +54,10 @@ void setup_config(quiche_config **config) {
         std::cout << "Failed to create quiche confiassag" << std::endl;
 
     }
+}
+
+void setup_config(quiche_config **config) {
+    setup_config(config, "./cert.crt", "./cert.key");
 }
 
 static void mint_token(const uint8_t *dcid, size_t dcid_len,

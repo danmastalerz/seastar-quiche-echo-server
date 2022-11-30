@@ -21,28 +21,38 @@ using quic_connection_ptr = std::shared_ptr<QuicConnection>;
 
 class QuicConnection {
 private:
-
-
-public:
     std::vector<uint8_t> cid;
     quiche_conn *conn;
     struct sockaddr_storage peer_addr;
     socklen_t peer_addr_len;
-    seastar::future<> udp_send_queue;
+    seastar::future<> &udp_send_queue;
+    udp_channel &channel;
+    bool is_timer_active;
 
+
+public:
+    // Unfortunately the constructor cannot be made public, because of std::make_shared requirements.
     QuicConnection(std::vector<uint8_t> &&_cid, quiche_conn *_conn,
-                   sockaddr_storage _peer_addr, socklen_t _peer_addr_len);
+                   sockaddr_storage _peer_addr, socklen_t _peer_addr_len,
+                   seastar::future<> &_udp_send_queue, udp_channel &_channel);
 
+    ~QuicConnection();
+
+
+    // static factory
     static std::optional<quic_connection_ptr> from(quic_header_info *info, sockaddr *local_addr,
                                                     socklen_t local_addr_len, sockaddr_storage *peer_addr,
-                                                    socklen_t peer_addr_len, quiche_config *config);
+                                                    socklen_t peer_addr_len, quiche_config *config,
+                                                    seastar::future<> &server_udp_send_queue,
+                                                    udp_channel &server_udp_channel);
 
     const std::vector<uint8_t> &get_connection_id();
-    quiche_conn *get_conn();
+    bool is_closed();
 
     seastar::future<> receive_packet(uint8_t *receive_buffer, size_t receive_len, udp_datagram &datagram);
     seastar::future<> read_from_streams_and_echo();
-    seastar::future<> &get_send_queue();
+    seastar::future<> send_packets_out();
+    seastar::future<> handle_timeout();
 
 };
 

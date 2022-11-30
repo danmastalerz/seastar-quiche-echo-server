@@ -7,7 +7,8 @@ Server::Server(std::uint16_t port) :
         config(nullptr),
         clients(),
         receive_buffer(),
-        receive_len() {}
+        receive_len(),
+        udp_send_queue(seastar::make_ready_future<>()) {}
 
 
 void Server::server_setup_config(std::string &cert, std::string &key) {
@@ -97,7 +98,8 @@ seastar::future<> Server::handle_pre_hs_connection(struct quic_header_info *info
     }
 
     std::optional<quic_connection_ptr> connection_opt = QuicConnection::from(info, &local_addr, local_addr_len,
-                                                                             peer_addr, peer_addr_len, config);
+                                                                             peer_addr, peer_addr_len, config,
+                                                                             udp_send_queue, channel);
 
     if (!connection_opt) {
         return seastar::make_ready_future<>();
@@ -121,8 +123,16 @@ seastar::future<> Server::negotiate_version(struct quic_header_info *info, udp_d
         return seastar::make_ready_future<>();
     }
 
+    std::unique_ptr<char> p(new char[written]);
+    std::memcpy(p.get(), out, written);
+
+    udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, src_address = datagram.get_src()] () {
+        std::cerr << "sending " << written << " bytes of data.\n";
+        return channel.send(src_address, seastar::temporary_buffer<char>(p.get(), written));
+    });
+
     std::cerr << "sending " << written << " bytes.\n";
-    return channel.send(datagram.get_src(), seastar::temporary_buffer<char>(out, written));
+    return seastar::make_ready_future<>();
 }
 
 
@@ -155,8 +165,15 @@ seastar::future<> Server::quic_retry(quic_header_info *info, udp_datagram &datag
         return seastar::make_ready_future<>();
     }
 
-    std::cerr << "sending " << written << " bytes.\n";
-    return channel.send(datagram.get_src(), seastar::temporary_buffer<char>(out, written));
+    std::unique_ptr<char> p(new char[written]);
+    std::memcpy(p.get(), out, written);
+
+    udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, src_address = datagram.get_src()] () {
+        std::cerr << "sending " << written << " bytes of data.\n";
+        return channel.send(src_address, seastar::temporary_buffer<char>(p.get(), written));
+    });
+
+    return seastar::make_ready_future<>();
 }
 
 
@@ -166,37 +183,21 @@ seastar::future<> Server::handle_post_hs_connection(quic_connection_ptr &connect
         return connection->receive_packet(receive_buffer, receive_len, datagram).then(
                 [this, &connection, &datagram] () {
                     return connection->read_from_streams_and_echo().then([this, &connection, &datagram] () {
-                        return send_data(connection, datagram);
+                        return send_data();
                     });
         });
     });
 }
 
 
-seastar::future<> Server::send_data(quic_connection_ptr &connection, udp_datagram &datagram) {
-    return seastar::repeat([this, &connection, &datagram] () {
-        uint8_t out[MAX_DATAGRAM_SIZE];
-        quiche_send_info send_info;
+seastar::future<> Server::send_data() {
+    // Remove closed connections.
+    std::erase_if(clients, [] (const auto &pair) {
+       return pair.second->is_closed();
+    });
 
-        ssize_t written = quiche_conn_send(connection->get_conn(), out, sizeof(out), &send_info);
-
-        if (written == QUICHE_ERR_DONE) {
-            return seastar::make_ready_future<seastar::stop_iteration>(seastar::stop_iteration::yes);
-        }
-
-        if (written < 0) {
-            std::cerr << "failed to create packet: " << written << "\n";
-        }
-
-        std::unique_ptr<char> p(new char[written]);
-        std::memcpy(p.get(), out, written);
-        seastar::future<> &udp_send_queue = connection->get_send_queue();
-
-        udp_send_queue = udp_send_queue.then([this, &datagram, p = std::move(p), written] () {
-            std::cerr << "sending " << written << " bytes of data.\n";
-            return channel.send(datagram.get_src(), seastar::temporary_buffer<char>(p.get(), written));
-        });
-
-        return seastar::make_ready_future<seastar::stop_iteration>(seastar::stop_iteration::no);
+    // Iterate over all active connections and push outgoing packets to queue.
+    return seastar::do_for_each(clients, [] (auto &pair) {
+        return pair.second->send_packets_out();
     });
 }

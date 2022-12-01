@@ -8,7 +8,14 @@ Server::Server(std::uint16_t port) :
         clients(),
         receive_buffer(),
         receive_len(),
-        udp_send_queue(seastar::make_ready_future<>()) {}
+        udp_send_queue(seastar::make_ready_future<>()) {
+    // Catch SIGSTP signal and close the channel.
+    seastar::engine().handle_signal(SIGTSTP, [this] {
+        std::cout << "Closing the channel.\n";
+        channel.close();
+        seastar::engine().exit(0);
+    });
+}
 
 
 void Server::server_setup_config(std::string &cert, std::string &key) {
@@ -31,7 +38,6 @@ seastar::future<> Server::service_loop() {
             memcpy(receive_buffer, fragment_array->base, fragment_array->size);
             receive_len = dgram.get_data().len();
             receive_buffer[receive_len] = '\0';
-            std::cerr << "Received " << receive_len << " bytes from socket\n";
 
             // Feed the raw data into quiché and handle the connection
             return handle_datagram(dgram);
@@ -182,7 +188,7 @@ seastar::future<> Server::handle_post_hs_connection(quic_connection_ptr &connect
             [this] (quic_connection_ptr &connection, udp_datagram &datagram) {
         return connection->receive_packet(receive_buffer, receive_len, datagram).then(
                 [this, &connection, &datagram] () {
-                    return connection->read_from_streams_and_echo().then([this, &connection, &datagram] () {
+                    return connection->read_from_stream_and_append_to_file().then([this, &connection, &datagram] () {
                         return send_data();
                     });
         });

@@ -1,6 +1,9 @@
 #include <client/client.h>
 #include <seastar/core/sleep.hh>
 #include <cinttypes>
+#include <fstream>
+
+static size_t sent = 0;
 
 void setup_config(quiche_config **config) {
 
@@ -28,13 +31,16 @@ void setup_config(quiche_config **config) {
     }
 
 }
-
-Client::Client(const char *host, uint16_t port) :
+Client::Client(const char *host, uint16_t port, std::string file) :
         channel(seastar::make_udp_channel()),
         server_host(host),
         server_address(seastar::ipv4_addr(host, port)),
         is_timer_active(false),
-        config(nullptr) {}
+        config(nullptr),
+        file(file),
+        fin(file, std::ifstream::binary),
+        send_file_buffer(std::vector<char>(FILE_CHUNK))
+        {}
 
 void Client::client_setup_config() {
     setup_config(&config);
@@ -146,10 +152,10 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
         return seastar::make_ready_future<>();
     }
 
-    if (quiche_conn_is_closed(conn_io->conn)) {
-        fprintf(stderr, "connection closed\n");
-        return handle_timeout();
-    }
+//    if (quiche_conn_is_closed(conn_io->conn)) {
+//        fprintf(stderr, "connection closed\n");
+//        return handle_timeout();
+//    }
 
     if (quiche_conn_is_established(conn_io->conn)) {
         uint64_t s = 0;
@@ -167,7 +173,7 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
                 break;
             }
 
-            printf("%.*s", (int) recv_len, buf);
+            printf("received from the server: %.*s", (int) recv_len, buf);
             echo_received = true;
 
             if (fin) {
@@ -187,19 +193,43 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
         quiche_conn_application_proto(conn_io->conn, &app_proto, &app_proto_len);
 
 
-        if (echo_received) {
-            // Get line from the user.
-            char line_user[1024];
-            fprintf(stderr, "Enter text to send: \n");
-            fgets(line_user, sizeof(line_user), stdin);
+//        if (echo_received) {
+//            // Get line from the user.
+//            char line_user[1024];
+//            fprintf(stderr, "Enter text to send: \n");
+//            fgets(line_user, sizeof(line_user), stdin);
+//
+//            auto *line = (uint8_t *) line_user;
+//
+//            if (quiche_conn_stream_send(conn_io->conn, 4, line, strlen(line_user) + 1, false) < 0) {
+//                return seastar::make_ready_future<>();
+//            }
+//            echo_received = false;
+//        }
 
-            auto *line = (uint8_t *) line_user;
-
-            if (quiche_conn_stream_send(conn_io->conn, 4, line, strlen(line_user) + 1, false) < 0) {
+        if (!fin.eof()) {
+            fin.read(send_file_buffer.data(), send_file_buffer.size());
+            auto send_file_buffer_size = fin.gcount();
+            auto x = quiche_conn_stream_send(conn_io->conn, 4,
+                                             reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
+                                             send_file_buffer_size, false);
+            if (x < 0) {
                 return seastar::make_ready_future<>();
             }
-            echo_received = false;
+            sent += x;
+            std::cout << "\033[2J\033[1;1H";
+            //sendfilebuffer size
+            std::cout << "Buffer_size: " << send_file_buffer_size << std::endl;
+            std::cout << "Sent " << sent / 1024.0 << " kilobytes (" << sent / 1024.0 / 1024.0 << " megabytes) in total." << std::endl;
         }
+        else {
+            std::cout << "File sent." << std::endl;
+//            if (quiche_conn_stream_send(conn_io->conn, 4, reinterpret_cast<const uint8_t *>("finished"), 9, true) < 0) {
+//                return seastar::make_ready_future<>();
+//            }
+        }
+
+
     }
 
     return send_data(conn_io, channel, addr);
@@ -207,7 +237,6 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 
 seastar::future<> Client::handle_timeout() {
     quiche_conn_on_timeout(connection->conn);
-    std::cout << "getting timeout " << std::endl;
     is_timer_active = false;
 
     if (quiche_conn_is_closed(connection->conn)) {
@@ -230,6 +259,8 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
 
     quiche_send_info send_info;
 
+    seastar::future<> f = seastar::make_ready_future<>();
+
     while (true) {
 
         ssize_t written = quiche_conn_send(conn_data->conn, out, sizeof(out),
@@ -244,14 +275,13 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
             exit(1);
         }
 
-        std::cout << "sending " << written << " bytes" << std::endl;
-
-        (void) chan.send(addr,
-                         seastar::temporary_buffer<char>(reinterpret_cast<const char *>(out), written));
+        // Wait for f to complete before sending the next packet.
+        f = f.then([this, &chan, &addr, &out, written] {
+            return chan.send(addr, seastar::temporary_buffer<char>(reinterpret_cast<const char *>(out), written));
+        });
 
     }
 
-    std::cout << "if closed " << quiche_conn_is_closed(conn_data->conn) << std::endl;
 
 
     if (!is_timer_active) {
@@ -259,14 +289,13 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
 
 
         if (timeout > 0) {
-            std::cerr << "Setting the timer for " << timeout << " millis.\n";
             (void) seastar::sleep(std::chrono::milliseconds(timeout)).then([this] () {
                 return handle_timeout();
             });
             is_timer_active = true;
         }
     }
-    return seastar::make_ready_future<>();
+    return f;
 }
 
 seastar::future<> Client::receive() {

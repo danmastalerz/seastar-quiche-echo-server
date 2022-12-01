@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <seastar/core/reactor.hh>
 #include <quiche_utils.h>
+#include <fstream>
 
 #define LOCAL_CONN_ID_LEN 16
 
@@ -28,6 +29,11 @@ private:
     seastar::future<> &udp_send_queue;
     udp_channel &channel;
     bool is_timer_active;
+    std::ofstream save_stream;
+    size_t received_bytes;
+    size_t received_bytes_now;
+    //timer
+    seastar::timer<> timer;
 
 
 public:
@@ -50,7 +56,7 @@ public:
     bool is_closed();
 
     seastar::future<> receive_packet(uint8_t *receive_buffer, size_t receive_len, udp_datagram &datagram);
-    seastar::future<> read_from_streams_and_echo();
+    seastar::future<> read_from_stream_and_append_to_file();
     seastar::future<> send_packets_out();
     seastar::future<> handle_timeout();
 

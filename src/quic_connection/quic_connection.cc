@@ -12,7 +12,23 @@ QuicConnection::QuicConnection(std::vector<uint8_t> &&_cid, quiche_conn *_conn,
             peer_addr_len(_peer_addr_len),
             udp_send_queue(_udp_send_queue),
             channel(_udp_channel),
-            is_timer_active(false) {}
+            is_timer_active(false),
+            save_stream("saved_file.txt", std::ofstream::binary),
+            received_bytes(0),
+            received_bytes_now(0) {
+    using namespace std::chrono_literals;
+    timer.set_callback([this] {
+        std::cout << "\033[2J\033[1;1H";
+        int received_kilobytes = received_bytes / 1024;
+        int received_kilobytes_now = received_bytes_now / 1024;
+        double received_megabytes = received_bytes / 1024.0 / 1024.0;
+        double received_megabytes_now = received_bytes_now / 1024.0 / 1024.0;
+        std::cout << "Received " << received_kilobytes << " kilobytes (" << received_megabytes << " megabytes) in total." << std::endl;
+        std::cout << "Current downloading speed: " << received_kilobytes_now << " kilobytes (" << received_megabytes_now << " megabytes) per second." << std::endl;
+        received_bytes_now = 0;
+    });
+    timer.arm_periodic(1s);
+}
 
 
 QuicConnection::~QuicConnection() {
@@ -77,9 +93,7 @@ seastar::future<> QuicConnection::receive_packet(uint8_t *receive_buffer, size_t
 }
 
 
-// Very simplified version for echo scenario.
-// When server has complex logic, it's better to return the value to the server so he can handle it.
-seastar::future<> QuicConnection::read_from_streams_and_echo() {
+seastar::future<> QuicConnection::read_from_stream_and_append_to_file() {
     uint8_t receive_buffer[MAX_DATAGRAM_SIZE];
     ssize_t receive_len;
 
@@ -89,19 +103,20 @@ seastar::future<> QuicConnection::read_from_streams_and_echo() {
         quiche_stream_iter *readable = quiche_conn_readable(conn);
 
         while (quiche_stream_iter_next(readable, &s)) {
-            fprintf(stderr, "stream %" PRIu64 " is readable\n", s);
 
             bool fin = false;
             receive_len = quiche_conn_stream_recv(conn, s, receive_buffer, sizeof(receive_buffer), &fin);
-
+            received_bytes += receive_len;
+            received_bytes_now += receive_len;
             if (receive_len < 0) {
                 break;
             }
 
-            fprintf(stderr, "Received: %s\n", receive_buffer);
-            quiche_conn_stream_send(conn, s, receive_buffer, receive_len, false);
+            save_stream.write((char *) receive_buffer, receive_len);
 
             if (fin) {
+                std::cout << "Stream " << s << " is done" << std::endl;
+                save_stream.close();
                 static const char *resp = "Stream finished.\n";
                 quiche_conn_stream_send(conn, s, (uint8_t *) resp, 18, true);
             }
@@ -136,7 +151,6 @@ seastar::future<> QuicConnection::send_packets_out() {
         std::memcpy(p.get(), out, written);
 
         udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, send_info] () {
-            std::cerr << "sending " << written << " bytes of data.\n";
 
             sockaddr_in addr_in{};
             memcpy(&addr_in, &send_info.to, send_info.to_len);
@@ -152,7 +166,6 @@ seastar::future<> QuicConnection::send_packets_out() {
             // For some reason quiche_conn_timeout_* starts to return -1 (uint64_MAX)
             auto timeout = (int64_t) quiche_conn_timeout_as_millis(conn);
             if (timeout > 0) {
-                std::cerr << "Setting the timer for " << timeout << " millis.\n";
                 (void) seastar::sleep(std::chrono::milliseconds(timeout)).then([this] () {
                     return handle_timeout();
                 });

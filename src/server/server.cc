@@ -13,7 +13,7 @@ Server::Server(std::uint16_t port) :
     seastar::engine().handle_signal(SIGTSTP, [this] {
         std::cout << "Closing the channel.\n";
         channel.close();
-        seastar::engine().exit(0);
+        exit(0);
     });
 }
 

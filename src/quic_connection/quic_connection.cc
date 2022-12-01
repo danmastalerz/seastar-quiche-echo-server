@@ -118,7 +118,7 @@ seastar::future<> QuicConnection::read_from_stream_and_append_to_file() {
                 std::cout << "Stream " << s << " is done" << std::endl;
                 save_stream.close();
                 static const char *resp = "Stream finished.\n";
-                quiche_conn_stream_send(conn, s, (uint8_t *) resp, 18, true);
+                quiche_conn_stream_send(conn, s, (uint8_t *) resp, strlen(resp) + 1, true);
             }
         }
 

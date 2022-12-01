@@ -8,7 +8,7 @@
 #include <client/client.h>
 
 seastar::future<> submit_to_cores(std::uint16_t port, const char *host, const std::string file) {
-    return seastar::parallel_for_each(boost::irange<unsigned>(0, seastar::smp::count),
+    return seastar::parallel_for_each(boost::irange<unsigned>(0, 1),
                                       [port, host, file](unsigned core) {
                                           return seastar::smp::submit_to(core, [port, host, file] {
                                               Client client(host, port, file);

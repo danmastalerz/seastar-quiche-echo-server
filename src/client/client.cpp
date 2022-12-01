@@ -4,6 +4,7 @@
 #include <fstream>
 
 static size_t sent = 0;
+static size_t read_f = 0;
 
 void setup_config(quiche_config **config) {
 
@@ -203,7 +204,7 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 //
 //            if (quiche_conn_stream_send(conn_io->conn, 4, line, strlen(line_user) + 1, false) < 0) {
 //                return seastar::make_ready_future<>();
-//            }
+//            }fin
 //            echo_received = false;
 //        }
 
@@ -217,16 +218,14 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
                 return seastar::make_ready_future<>();
             }
             sent += x;
+            read_f += send_file_buffer_size;
             std::cout << "\033[2J\033[1;1H";
-            //sendfilebuffer size
-            std::cout << "Buffer_size: " << send_file_buffer_size << std::endl;
+
+            std::cout << "Read " << read_f / 1024.0 << " kilobytes (" << read_f / 1024.0 / 1024.0 << " megabytes) in total." << std::endl;
             std::cout << "Sent " << sent / 1024.0 << " kilobytes (" << sent / 1024.0 / 1024.0 << " megabytes) in total." << std::endl;
         }
         else {
-            std::cout << "File sent." << std::endl;
-//            if (quiche_conn_stream_send(conn_io->conn, 4, reinterpret_cast<const uint8_t *>("finished"), 9, true) < 0) {
-//                return seastar::make_ready_future<>();
-//            }
+            return send_data(conn_io, channel, addr);
         }
 
 
@@ -261,10 +260,12 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
 
     seastar::future<> f = seastar::make_ready_future<>();
 
-    while (true) {
+    std::cout << "debug" << std::endl;
 
+    while (true) {
         ssize_t written = quiche_conn_send(conn_data->conn, out, sizeof(out),
                                            &send_info);
+        std::cout << written << std::endl;
 
         if (written == QUICHE_ERR_DONE) {
             break;

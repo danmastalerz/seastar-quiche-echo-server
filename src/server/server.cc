@@ -2,10 +2,13 @@
 #include <cinttypes>
 
 
-Server::Server(std::uint16_t port) :
+// Sum all read bytes across all connections.
+
+Server::Server(std::uint16_t port, int core) :
         channel(seastar::make_udp_channel(port)),
         config(nullptr),
         clients(),
+        core(core),
         receive_buffer(),
         receive_len(),
         udp_send_queue(seastar::make_ready_future<>()) {
@@ -30,6 +33,28 @@ seastar::future<> Server::service_loop() {
     }
     std::cerr << "Config setup successful.\n";
     std::cerr << "Listen address: " << channel.local_address() << "\n";
+
+
+
+    // Get all connections set.
+    for (auto &client : clients) {
+        read_bytes += client.second->received_bytes;
+        read_bytes_now += client.second->received_bytes_now;
+    }
+
+    using namespace std::chrono_literals;
+    timer.set_callback([this] {
+        //std::cout << "\033[2J\033[1;1H";
+        int received_kilobytes = read_bytes / 1024;
+        int received_kilobytes_now = read_bytes_now / 1024;
+        double received_megabytes = read_bytes / 1024.0 / 1024.0;
+        double received_megabytes_now = read_bytes_now / 1024.0 / 1024.0;
+        std::cout << "Shard: " << seastar::this_shard_id() << std::endl;
+        std::cout << "Received " << received_kilobytes << " kilobytes (" << received_megabytes << " megabytes) in total." << std::endl;
+        std::cout << "Current downloading speed: " << received_kilobytes_now << " kilobytes (" << received_megabytes_now << " megabytes) per second." << std::endl;
+        read_bytes_now = 0;
+    });
+    timer.arm_periodic(1s);
 
     return seastar::keep_doing([this] () {
         return channel.receive().then([this](udp_datagram dgram) {
@@ -189,6 +214,9 @@ seastar::future<> Server::handle_post_hs_connection(quic_connection_ptr &connect
         return connection->receive_packet(receive_buffer, receive_len, datagram).then(
                 [this, &connection, &datagram] () {
                     return connection->read_from_stream_and_append_to_file().then([this, &connection, &datagram] () {
+                        read_bytes_now += connection->received_bytes_now;
+                        read_bytes += connection->received_bytes_now;
+                        connection->received_bytes_now = 0;
                         return send_data();
                     });
         });

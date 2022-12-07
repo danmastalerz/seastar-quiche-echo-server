@@ -34,11 +34,12 @@ private:
 
 
 public:
-    explicit Client(const char *host, std::uint16_t port, std::string file);
+    explicit Client(const char *host, std::uint16_t port, std::string file, int core);
 
     void client_setup_config();
 
     seastar::future<> client_loop();
+    int core;
 
 };
 

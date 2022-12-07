@@ -18,6 +18,10 @@ private:
     uint8_t receive_buffer[MAX_DATAGRAM_SIZE]{};
     ssize_t receive_len;
     seastar::future<> udp_send_queue;
+    int core = -1;
+    ssize_t read_bytes_now = 0;
+    ssize_t read_bytes = 0;
+    seastar::timer<> timer;
 
     static int read_header_info(uint8_t *buf, size_t buf_size, quic_header_info *info);
     seastar::future<> handle_datagram(udp_datagram &dgram);
@@ -30,7 +34,7 @@ private:
     seastar::future<> handle_post_hs_connection(quic_connection_ptr &connection, udp_datagram &datagram);
 
 public:
-    explicit Server(std::uint16_t port);
+    Server(std::uint16_t port, int core);
 
     void server_setup_config(std::string &cert, std::string &key);
     seastar::future<> service_loop();

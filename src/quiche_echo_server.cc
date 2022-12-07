@@ -8,10 +8,11 @@
 #include <server/server.h>
 
 seastar::future<> submit_to_cores(std::uint16_t port, std::string &cert, std::string &key) {
-    return seastar::parallel_for_each(boost::irange<unsigned>(0, 1),
+    return seastar::parallel_for_each(boost::irange<unsigned>(0, seastar::smp::count),
           [port, &cert, &key](unsigned core) {
-              return seastar::smp::submit_to(core, [port, &cert, &key] {
-                  Server server(port);
+              return seastar::smp::submit_to(core, [port, &cert, &key, core] {
+                  std::cout << "core: " << core << std::endl;
+                  Server server(port + seastar::this_shard_id(), core);
                   server.server_setup_config(cert, key);
                   return seastar::do_with(std::move(server), [] (Server &server) {
                       return server.service_loop();

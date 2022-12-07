@@ -30,8 +30,6 @@ private:
     udp_channel &channel;
     bool is_timer_active;
     std::ofstream save_stream;
-    size_t received_bytes;
-    size_t received_bytes_now;
     //timer
     seastar::timer<> timer;
 
@@ -60,6 +58,8 @@ public:
     seastar::future<> send_packets_out();
     seastar::future<> handle_timeout();
 
+    size_t received_bytes_now;
+    size_t received_bytes;
 };
 
 #endif //SEASTAR_QUICHE_ECHO_DEMO_QUICHECONNECTION_H

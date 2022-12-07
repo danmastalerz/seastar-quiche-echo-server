@@ -32,16 +32,17 @@ void setup_config(quiche_config **config) {
     }
 
 }
-Client::Client(const char *host, uint16_t port, std::string file) :
+
+Client::Client(const char *host, uint16_t port, std::string file, int core) :
         channel(seastar::make_udp_channel()),
         server_host(host),
         server_address(seastar::ipv4_addr(host, port)),
         is_timer_active(false),
         config(nullptr),
         file(file),
+        core(core),
         fin(file, std::ifstream::binary),
-        send_file_buffer(std::vector<char>(FILE_CHUNK))
-        {}
+        send_file_buffer(std::vector<char>(FILE_CHUNK)) {}
 
 void Client::client_setup_config() {
     setup_config(&config);
@@ -208,25 +209,21 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 //            echo_received = false;
 //        }
 
-        if (!fin.eof()) {
-            fin.read(send_file_buffer.data(), send_file_buffer.size());
-            auto send_file_buffer_size = fin.gcount();
-            auto x = quiche_conn_stream_send(conn_io->conn, 4,
-                                             reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
-                                             send_file_buffer_size, false);
-            if (x < 0) {
-                return seastar::make_ready_future<>();
-            }
-            sent += x;
-            read_f += send_file_buffer_size;
-            std::cout << "\033[2J\033[1;1H";
 
-            std::cout << "Read " << read_f / 1024.0 << " kilobytes (" << read_f / 1024.0 / 1024.0 << " megabytes) in total." << std::endl;
-            std::cout << "Sent " << sent / 1024.0 << " kilobytes (" << sent / 1024.0 / 1024.0 << " megabytes) in total." << std::endl;
+        auto x = quiche_conn_stream_send(conn_io->conn, 4,
+                                         reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
+                                         FILE_CHUNK, false);
+        if (x < 0) {
+            return seastar::make_ready_future<>();
         }
-        else {
-            return send_data(conn_io, channel, addr);
-        }
+        sent += x;
+        read_f += FILE_CHUNK;
+        std::cout << "Shard: " << seastar::this_shard_id() << std::endl;
+
+        std::cout << "Read " << read_f / 1024.0 << " kilobytes (" << read_f / 1024.0 / 1024.0 << " megabytes) in total."
+                  << std::endl;
+        std::cout << "Sent " << sent / 1024.0 << " kilobytes (" << sent / 1024.0 / 1024.0 << " megabytes) in total."
+                  << std::endl;
 
 
     }
@@ -253,6 +250,7 @@ seastar::future<> Client::handle_timeout() {
 
     return send_data(connection, channel, server_address);
 }
+
 seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan, seastar::ipv4_addr &addr) {
     uint8_t out[MAX_DATAGRAM_SIZE];
 
@@ -284,13 +282,12 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
     }
 
 
-
     if (!is_timer_active) {
         auto timeout = (int64_t) quiche_conn_timeout_as_millis(conn_data->conn);
 
 
         if (timeout > 0) {
-            (void) seastar::sleep(std::chrono::milliseconds(timeout)).then([this] () {
+            (void) seastar::sleep(std::chrono::milliseconds(timeout)).then([this]() {
                 return handle_timeout();
             });
             is_timer_active = true;

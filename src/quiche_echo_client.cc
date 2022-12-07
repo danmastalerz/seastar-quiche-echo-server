@@ -8,10 +8,10 @@
 #include <client/client.h>
 
 seastar::future<> submit_to_cores(std::uint16_t port, const char *host, const std::string file) {
-    return seastar::parallel_for_each(boost::irange<unsigned>(0, 1),
+    return seastar::parallel_for_each(boost::irange<unsigned>(0, seastar::smp::count),
                                       [port, host, file](unsigned core) {
-                                          return seastar::smp::submit_to(core, [port, host, file] {
-                                              Client client(host, port, file);
+                                          return seastar::smp::submit_to(core, [port, host, file, core] {
+                                              Client client(host, port + seastar::this_shard_id(), file, core);
                                               client.client_setup_config();
                                               return seastar::do_with(std::move(client), [](Client &client) {
                                                   std::cerr << "Running client loop...\n";

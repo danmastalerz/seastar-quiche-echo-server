@@ -16,18 +16,6 @@ QuicConnection::QuicConnection(std::vector<uint8_t> &&_cid, quiche_conn *_conn,
             save_stream("saved_file.txt", std::ofstream::binary),
             received_bytes(0),
             received_bytes_now(0) {
-    using namespace std::chrono_literals;
-    timer.set_callback([this] {
-        std::cout << "\033[2J\033[1;1H";
-        int received_kilobytes = received_bytes / 1024;
-        int received_kilobytes_now = received_bytes_now / 1024;
-        double received_megabytes = received_bytes / 1024.0 / 1024.0;
-        double received_megabytes_now = received_bytes_now / 1024.0 / 1024.0;
-        std::cout << "Received " << received_kilobytes << " kilobytes (" << received_megabytes << " megabytes) in total." << std::endl;
-        std::cout << "Current downloading speed: " << received_kilobytes_now << " kilobytes (" << received_megabytes_now << " megabytes) per second." << std::endl;
-        received_bytes_now = 0;
-    });
-    timer.arm_periodic(1s);
 }
 
 
@@ -112,7 +100,6 @@ seastar::future<> QuicConnection::read_from_stream_and_append_to_file() {
                 break;
             }
 
-            save_stream.write((char *) receive_buffer, receive_len);
 
             if (fin) {
                 std::cout << "Stream " << s << " is done" << std::endl;

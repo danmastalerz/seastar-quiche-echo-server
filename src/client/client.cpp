@@ -274,11 +274,37 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
             exit(1);
         }
 
-        // Wait for f to complete before sending the next packet.
-        f = f.then([this, &chan, &addr, &out, written] {
-            return chan.send(addr, seastar::temporary_buffer<char>(reinterpret_cast<const char *>(out), written));
-        });
+        auto timespec = send_info.at;
+        struct timespec diff{};
+        struct timespec now{};
+        clock_gettime(CLOCK_MONOTONIC, &now);
 
+        // Calculate difference between timespec and now
+        diff.tv_sec = timespec.tv_sec - now.tv_sec;
+        diff.tv_nsec = timespec.tv_nsec - now.tv_nsec;
+
+        // Print difference
+        //  std::cout << "Timespec value: " << timespec.tv_sec << " seconds and " << timespec.tv_nsec << " nanoseconds" << std::endl;
+        //  std::cout << "Now value: " << now.tv_sec << " seconds and " << now.tv_nsec << " nanoseconds" << std::endl;
+        std::cout << "Sleeping for " << diff.tv_sec << " seconds and " << diff.tv_nsec << " nanoseconds" << std::endl;
+
+        // Convert to chrono
+        auto sleep_duration = std::chrono::seconds(diff.tv_sec) + std::chrono::nanoseconds(diff.tv_nsec);
+
+        // Wait for f to complete before sending the next packet.
+        f = f.then([this, &chan, &addr, &out, written, &sleep_duration] {
+            if (sleep_duration.count() > 0) {
+                std::cout << "Sleeping before send" << std::endl;
+                return seastar::sleep(sleep_duration).then([this, &chan, &addr, &out, written] {
+                    return chan.send(addr,
+                                     seastar::temporary_buffer<char>(reinterpret_cast<const char *>(out), written));
+                });
+            } else {
+                return chan.send(addr,
+                                 seastar::temporary_buffer<char>(reinterpret_cast<const char *>(out), written));
+
+            }
+        });
     }
 
 

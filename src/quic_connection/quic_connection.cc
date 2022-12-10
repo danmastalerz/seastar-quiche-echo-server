@@ -136,11 +136,8 @@ seastar::future<> QuicConnection::send_packets_out() {
         std::unique_ptr<char> p(new char[written]);
         std::memcpy(p.get(), out, written);
 
-        udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, send_info]() {
-
-            sockaddr_in addr_in{};
-            memcpy(&addr_in, &send_info.to, send_info.to_len);
-            seastar::socket_address addr(addr_in);
+        udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, send_info]  () mutable {
+            std::cerr << "sending " << written << " bytes of data.\n";
 
             auto timespec = send_info.at;
             struct timespec diff{};
@@ -159,14 +156,15 @@ seastar::future<> QuicConnection::send_packets_out() {
             // Convert to chrono
             auto sleep_duration = std::chrono::seconds(diff.tv_sec) + std::chrono::nanoseconds(diff.tv_nsec);
 
-            if (sleep_duration.count() > 0) {
-                return seastar::sleep(sleep_duration).then([this, &addr, written, &p] {
-                    std::cout << "Sleeping before send" << std::endl;
-                    return channel.send(addr, seastar::temporary_buffer<char>(p.get(), written));
-                });
-            } else {
-                return channel.send(addr, seastar::temporary_buffer<char>(p.get(), written));
-            }
+            return seastar::sleep(sleep_duration).then([this, send_info, p = std::move(p), written] {
+
+                sockaddr_in addr_in{};
+                memcpy(&addr_in, &send_info.to, send_info.to_len);
+                seastar::socket_address addr(addr_in);
+
+                return channel.send(addr,
+                                    seastar::temporary_buffer<char>(p.get(), written));
+            });
         });
 
         return seastar::make_ready_future<seastar::stop_iteration>(seastar::stop_iteration::no);

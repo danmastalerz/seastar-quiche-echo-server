@@ -137,7 +137,6 @@ seastar::future<> QuicConnection::send_packets_out() {
         std::memcpy(p.get(), out, written);
 
         udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, send_info]  () mutable {
-            std::cerr << "sending " << written << " bytes of data.\n";
 
             auto timespec = send_info.at;
             struct timespec diff{};
@@ -147,11 +146,6 @@ seastar::future<> QuicConnection::send_packets_out() {
             // Calculate difference between timespec and now
             diff.tv_sec = timespec.tv_sec - now.tv_sec;
             diff.tv_nsec = timespec.tv_nsec - now.tv_nsec;
-
-            // Print difference
-            //  std::cout << "Timespec value: " << timespec.tv_sec << " seconds and " << timespec.tv_nsec << " nanoseconds" << std::endl;
-            //  std::cout << "Now value: " << now.tv_sec << " seconds and " << now.tv_nsec << " nanoseconds" << std::endl;
-            std::cout << "Sleeping for " << diff.tv_sec << " seconds and " << diff.tv_nsec << " nanoseconds" << std::endl;
 
             // Convert to chrono
             auto sleep_duration = std::chrono::seconds(diff.tv_sec) + std::chrono::nanoseconds(diff.tv_nsec);

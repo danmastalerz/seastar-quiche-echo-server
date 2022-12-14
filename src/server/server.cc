@@ -158,11 +158,9 @@ seastar::future<> Server::negotiate_version(struct quic_header_info *info, udp_d
     std::memcpy(p.get(), out, written);
 
     udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, src_address = datagram.get_src()] () {
-        std::cerr << "sending " << written << " bytes of data.\n";
         return channel.send(src_address, seastar::temporary_buffer<char>(p.get(), written));
     });
 
-    std::cerr << "sending " << written << " bytes.\n";
     return seastar::make_ready_future<>();
 }
 
@@ -200,7 +198,6 @@ seastar::future<> Server::quic_retry(quic_header_info *info, udp_datagram &datag
     std::memcpy(p.get(), out, written);
 
     udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, src_address = datagram.get_src()] () {
-        std::cerr << "sending " << written << " bytes of data.\n";
         return channel.send(src_address, seastar::temporary_buffer<char>(p.get(), written));
     });
 

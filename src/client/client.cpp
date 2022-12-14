@@ -10,7 +10,6 @@ void setup_config(quiche_config **config) {
 
     *config = quiche_config_new(0xbabababa);
     if (*config == nullptr) {
-        fprintf(stderr, "failed to create config\n");
         exit(1);
     }
 
@@ -50,13 +49,11 @@ void Client::client_setup_config() {
 
 seastar::future<> Client::client_loop() {
 
-    std::cout << "starting client loop" << std::endl;
 
     if (config == nullptr) {
         std::cerr << "Failed to setup quiche configuration...";
         return seastar::make_ready_future<>();
     }
-    std::cerr << "Config setup successful.\n";
 
 
     uint8_t scid[LOCAL_CONN_ID_LEN];
@@ -76,7 +73,6 @@ seastar::future<> Client::client_loop() {
     conn_data = (conn_io *) calloc(1, sizeof(conn_io));
 
     if (conn_data == nullptr) {
-        fprintf(stderr, "failed to allocate connection IO\n");
         return seastar::make_ready_future<>();
     }
 
@@ -90,7 +86,6 @@ seastar::future<> Client::client_loop() {
 
     connection = (conn_io *) calloc(1, sizeof(conn_io));
     if (connection == nullptr) {
-        fprintf(stderr, "failed to allocate connection IO\n");
     }
 
     quiche_conn *conn = quiche_connect(server_host, (const uint8_t *) scid, sizeof(scid),
@@ -99,7 +94,6 @@ seastar::future<> Client::client_loop() {
                                        (struct sockaddr *) &peer_addr, peer_addr_len,
                                        config);
     if (conn == nullptr) {
-        fprintf(stderr, "failed to create connection\n");
     }
     connection->conn = conn;
 
@@ -150,14 +144,8 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 
 
     if (done < 0) {
-        fprintf(stderr, "failed to process packet\n");
         return seastar::make_ready_future<>();
     }
-
-//    if (quiche_conn_is_closed(conn_io->conn)) {
-//        fprintf(stderr, "connection closed\n");
-//        return handle_timeout();
-//    }
 
     if (quiche_conn_is_established(conn_io->conn)) {
         uint64_t s = 0;
@@ -165,7 +153,6 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
         quiche_stream_iter *readable = quiche_conn_readable(conn_io->conn);
 
         while (quiche_stream_iter_next(readable, &s)) {
-            fprintf(stderr, "stream %" PRIu64 " is readable\n", s);
 
             bool fin = false;
             ssize_t recv_len = quiche_conn_stream_recv(conn_io->conn, s,
@@ -173,15 +160,6 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
                                                        &fin);
             if (recv_len < 0) {
                 break;
-            }
-
-            printf("received from the server: %.*s", (int) recv_len, buf);
-            echo_received = true;
-
-            if (fin) {
-                if (quiche_conn_close(conn_io->conn, true, 0, nullptr, 0) < 0) {
-                    fprintf(stderr, "failed to close connection\n");
-                }
             }
         }
 
@@ -194,22 +172,6 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 
         quiche_conn_application_proto(conn_io->conn, &app_proto, &app_proto_len);
 
-
-//        if (echo_received) {
-//            // Get line from the user.
-//            char line_user[1024];
-//            fprintf(stderr, "Enter text to send: \n");
-//            fgets(line_user, sizeof(line_user), stdin);
-//
-//            auto *line = (uint8_t *) line_user;
-//
-//            if (quiche_conn_stream_send(conn_io->conn, 4, line, strlen(line_user) + 1, false) < 0) {
-//                return seastar::make_ready_future<>();
-//            }fin
-//            echo_received = false;
-//        }
-
-
         auto x = quiche_conn_stream_send(conn_io->conn, 4,
                                          reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
                                          FILE_CHUNK, false);
@@ -218,8 +180,8 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
         }
         sent += x;
         read_f += FILE_CHUNK;
+        std::cout << "\033[2J\033[1;1H";
         std::cout << "Shard: " << seastar::this_shard_id() << std::endl;
-
         std::cout << "Read " << read_f / 1024.0 << " kilobytes (" << read_f / 1024.0 / 1024.0 << " megabytes) in total."
                   << std::endl;
         std::cout << "Sent " << sent / 1024.0 << " kilobytes (" << sent / 1024.0 / 1024.0 << " megabytes) in total."
@@ -258,7 +220,6 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
 
     seastar::future<> f = seastar::make_ready_future<>();
 
-    std::cout << "debug" << std::endl;
 
     while (true) {
         ssize_t written = quiche_conn_send(conn_data->conn, out, sizeof(out),
@@ -270,7 +231,6 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
         }
 
         if (written < 0) {
-            fprintf(stderr, "failed to create packet: %zd\n", written);
             exit(1);
         }
 
@@ -286,11 +246,6 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
         // Calculate difference between timespec and now
         diff.tv_sec = timespec.tv_sec - now.tv_sec;
         diff.tv_nsec = timespec.tv_nsec - now.tv_nsec;
-
-        // Print difference
-        //  std::cout << "Timespec value: " << timespec.tv_sec << " seconds and " << timespec.tv_nsec << " nanoseconds" << std::endl;
-        //  std::cout << "Now value: " << now.tv_sec << " seconds and " << now.tv_nsec << " nanoseconds" << std::endl;
-        std::cout << "Sleeping for " << diff.tv_sec << " seconds and " << diff.tv_nsec << " nanoseconds" << std::endl;
 
         // Convert to chrono
         auto sleep_duration = std::chrono::seconds(diff.tv_sec) + std::chrono::nanoseconds(diff.tv_nsec);

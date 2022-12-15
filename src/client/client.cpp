@@ -21,10 +21,14 @@ void setup_config(quiche_config **config) {
     quiche_config_set_max_send_udp_payload_size(*config, MAX_DATAGRAM_SIZE);
     quiche_config_set_initial_max_data(*config, 10000000);
     quiche_config_set_initial_max_stream_data_bidi_local(*config, 1000000);
+    quiche_config_set_initial_max_stream_data_bidi_remote(*config, 1000000);
     quiche_config_set_initial_max_stream_data_uni(*config, 1000000);
-    quiche_config_set_initial_max_streams_bidi(*config, 100);
-    quiche_config_set_initial_max_streams_uni(*config, 100);
+    quiche_config_set_initial_max_streams_bidi(*config, 1000);
+    quiche_config_set_initial_max_streams_uni(*config, 1000);
     quiche_config_set_disable_active_migration(*config, true);
+    quiche_config_set_cc_algorithm(*config, QUICHE_CC_RENO);
+    quiche_config_set_max_stream_window(*config, MAX_DATAGRAM_SIZE);
+    quiche_config_set_max_connection_window(*config, MAX_DATAGRAM_SIZE);
 
     if (getenv("SSLKEYLOGFILE")) {
         quiche_config_log_keys(*config);
@@ -172,14 +176,19 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 
         quiche_conn_application_proto(conn_io->conn, &app_proto, &app_proto_len);
 
-        auto x = quiche_conn_stream_send(conn_io->conn, 4,
-                                         reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
-                                         FILE_CHUNK, false);
-        if (x < 0) {
-            return seastar::make_ready_future<>();
+        int streams = 1;
+        int used_streams = streams;
+        for (int i = 0; i < streams; i++) {
+            auto x = quiche_conn_stream_send(conn_io->conn, 4,
+                                             reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
+                                             FILE_CHUNK, false);
+            if (x < 0) {
+                return seastar::make_ready_future<>();
+            }
+            sent += x;
+            read_f += FILE_CHUNK;
         }
-        sent += x;
-        read_f += FILE_CHUNK;
+
         std::cout << "\033[2J\033[1;1H";
         std::cout << "Shard: " << seastar::this_shard_id() << std::endl;
         std::cout << "Read " << read_f / 1024.0 << " kilobytes (" << read_f / 1024.0 / 1024.0 << " megabytes) in total."

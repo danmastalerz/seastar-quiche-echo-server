@@ -5,6 +5,7 @@
 
 static size_t sent = 0;
 static size_t read_f = 0;
+static bool streams_initialized = false;
 
 void setup_config(quiche_config **config) {
 
@@ -23,12 +24,12 @@ void setup_config(quiche_config **config) {
     quiche_config_set_initial_max_stream_data_bidi_local(*config, 1000000);
     quiche_config_set_initial_max_stream_data_bidi_remote(*config, 1000000);
     quiche_config_set_initial_max_stream_data_uni(*config, 1000000);
-    quiche_config_set_initial_max_streams_bidi(*config, 100);
-    quiche_config_set_initial_max_streams_uni(*config, 100);
+    quiche_config_set_initial_max_streams_bidi(*config, 1000);
+    quiche_config_set_initial_max_streams_uni(*config, 1000);
     quiche_config_set_disable_active_migration(*config, true);
     quiche_config_set_cc_algorithm(*config, QUICHE_CC_RENO);
-    quiche_config_set_max_stream_window(*config, 1000000);
-    quiche_config_set_max_connection_window(*config, 1000000);
+    quiche_config_set_max_stream_window(*config, MAX_DATAGRAM_SIZE);
+    quiche_config_set_max_connection_window(*config, MAX_DATAGRAM_SIZE);
 
     if (getenv("SSLKEYLOGFILE")) {
         quiche_config_log_keys(*config);
@@ -170,29 +171,57 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
         quiche_stream_iter_free(readable);
     }
 
+
+
     if (quiche_conn_is_established(conn_io->conn)) {
         const uint8_t *app_proto;
         size_t app_proto_len;
 
         quiche_conn_application_proto(conn_io->conn, &app_proto, &app_proto_len);
 
-        int streams = 1;
-        int used_streams = 10;
-        for (int i = 0; i < streams; i++) {
-            auto x = quiche_conn_stream_send(conn_io->conn, 4*i,
-                                             reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
-                                             FILE_CHUNK, false);
-            if (x < 0) {
-                fprintf(stderr, "failed to send data in stream, err=%zd", x);
-                x = 0;
-                used_streams--;
+        int streams = 1000;
+        int used_streams = streams;
+
+        if (!streams_initialized) {
+            for (int i = 0; i < streams; i++) {
+                uint8_t hello[1] = {0};
+                quiche_conn_stream_send(conn_io->conn, 4*i, hello, sizeof(hello), false);
             }
-            sent += x;
-            read_f += FILE_CHUNK;
+            streams_initialized = true;
+        }
+
+        auto first_capacity = 16000;
+        std::cout << "\033[2J\033[1;1H";
+        for (int i = 0; i < streams; i++) {
+            auto cap = quiche_conn_stream_capacity(conn_io->conn, 4*i);
+            if (i == 0 && cap > 0) {
+                first_capacity = cap;
+            }
+            //std::cout << "Stream capacity: " << cap << std::endl;
+            if (cap > first_capacity / streams) {
+                cap = first_capacity / streams;
+            }
+            if (cap > 16) {
+                cap = 16;
+            }
+            if (cap > 0) {
+                auto x = quiche_conn_stream_send(conn_io->conn, 4*i,
+                                                 reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
+                                                 cap, false);
+                if (x < 0) {
+                    fprintf(stderr, "failed to send data in stream, err=%zd", x);
+                    x = 0;
+                }
+                sent += x;
+                read_f += cap;
+            } else {
+                used_streams--;
+
+            }
+
         }
 
 
-        std::cout << "\033[2J\033[1;1H";
         std::cout << "Used streams: " << used_streams << std::endl;
         std::cout << "Shard: " << seastar::this_shard_id() << std::endl;
         std::cout << "Read " << read_f / 1024.0 << " kilobytes (" << read_f / 1024.0 / 1024.0 << " megabytes) in total."
@@ -237,7 +266,7 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
     while (true) {
         ssize_t written = quiche_conn_send(conn_data->conn, out, sizeof(out),
                                            &send_info);
-        std::cout << written << std::endl;
+        std::cout << "Trying to send: " << written << std::endl;
 
         if (written == QUICHE_ERR_DONE) {
             break;

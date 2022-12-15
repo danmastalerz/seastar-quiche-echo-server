@@ -12,13 +12,12 @@
 #define LOCAL_CONN_ID_LEN 16
 
 #define MAX_DATAGRAM_SIZE 65000
-#define FILE_CHUNK 16000
+#define FILE_CHUNK 1000000
 
 #define MAX_TOKEN_LEN \
     sizeof("quiche") - 1 + \
     sizeof(struct sockaddr_storage) + \
     QUICHE_MAX_CONN_ID_LEN
-
 
 struct quic_header_info {
     uint8_t type{};
@@ -68,12 +67,12 @@ inline void setup_config(quiche_config **config, const std::string &cert, const 
     quiche_config_set_initial_max_stream_data_bidi_local(*config, 1000000);
     quiche_config_set_initial_max_stream_data_bidi_remote(*config, 1000000);
     quiche_config_set_initial_max_stream_data_uni(*config, 1000000);
-    quiche_config_set_initial_max_streams_bidi(*config, 100);
-    quiche_config_set_initial_max_streams_uni(*config, 100);
+    quiche_config_set_initial_max_streams_bidi(*config, 1000);
+    quiche_config_set_initial_max_streams_uni(*config, 1000);
     quiche_config_set_disable_active_migration(*config, true);
     quiche_config_set_cc_algorithm(*config, QUICHE_CC_RENO);
-    quiche_config_set_max_stream_window(*config, 1000000);
-    quiche_config_set_max_connection_window(*config, 1000000);
+    quiche_config_set_max_stream_window(*config, MAX_DATAGRAM_SIZE);
+    quiche_config_set_max_connection_window(*config, MAX_DATAGRAM_SIZE);
 
     if (*config == nullptr) {
         std::cerr << "Failed to create quiche confiassag" << std::endl;

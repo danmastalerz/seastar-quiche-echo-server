@@ -45,6 +45,7 @@ Client::Client(const char *host, uint16_t port, std::string file, int core) :
         file(file),
         core(core),
         fin(file, std::ifstream::binary),
+        are_streams_initialized(false),
         send_file_buffer(std::vector<char>(FILE_CHUNK)) {}
 
 void Client::client_setup_config() {
@@ -178,18 +179,35 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 
         int streams = 1;
         int used_streams = streams;
+
+        if (!are_streams_initialized) {
+            for (int i = 0; i < streams; i++) {
+                quiche_conn_stream_send(conn_io->conn, 4 * i + 2, (uint8_t *) "x", 1, false);
+            }
+            are_streams_initialized = true;
+        }
+        std::cout << "\033[2J\033[1;1H";
+        ssize_t capacity_first = quiche_conn_stream_capacity(conn_io->conn, 2);
+        if (capacity_first > FILE_CHUNK) {
+            capacity_first = FILE_CHUNK;
+        }
+        if (capacity_first < 0) {
+            std::runtime_error("Capacity is negative");
+        }
+        auto to_send = capacity_first / streams;
+        std::cout << "In each stream: " << to_send << std::endl;
         for (int i = 0; i < streams; i++) {
-            auto x = quiche_conn_stream_send(conn_io->conn, 4,
+            auto x = quiche_conn_stream_send(conn_io->conn, 4 * i + 2,
                                              reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
-                                             FILE_CHUNK, false);
+                                             to_send, false);
             if (x < 0) {
+                std::cout << "Error sending data" << std::endl;
                 return seastar::make_ready_future<>();
             }
             sent += x;
-            read_f += FILE_CHUNK;
+            read_f += to_send;
         }
 
-        std::cout << "\033[2J\033[1;1H";
         std::cout << "Shard: " << seastar::this_shard_id() << std::endl;
         std::cout << "Read " << read_f / 1024.0 << " kilobytes (" << read_f / 1024.0 / 1024.0 << " megabytes) in total."
                   << std::endl;
@@ -233,7 +251,7 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
     while (true) {
         ssize_t written = quiche_conn_send(conn_data->conn, out, sizeof(out),
                                            &send_info);
-        std::cout << written << std::endl;
+        //std::cout << written << std::endl;
 
         if (written == QUICHE_ERR_DONE) {
             break;

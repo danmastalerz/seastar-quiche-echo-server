@@ -22,6 +22,8 @@ private:
     std::string file;
     std::ifstream fin;
     std::vector<char> send_file_buffer;
+    bool are_streams_initialized;
+
     seastar::future<> handle_timeout();
 
     seastar::future<> send_data(struct conn_io *conn_data, udp_channel &chan, seastar::ipv4_addr &addr);

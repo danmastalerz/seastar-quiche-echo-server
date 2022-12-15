@@ -188,9 +188,9 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
         }
         std::cout << "\033[2J\033[1;1H";
         ssize_t capacity_first = quiche_conn_stream_capacity(conn_io->conn, 2);
-        if (capacity_first > FILE_CHUNK) {
-            capacity_first = FILE_CHUNK;
-        }
+//        if (capacity_first > FILE_CHUNK) {
+//            capacity_first = FILE_CHUNK;
+//        }
         if (capacity_first < 0) {
             std::runtime_error("Capacity is negative");
         }

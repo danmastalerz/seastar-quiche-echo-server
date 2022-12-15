@@ -177,7 +177,7 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 
         quiche_conn_application_proto(conn_io->conn, &app_proto, &app_proto_len);
 
-        int streams = 1;
+        int streams = 1000;
         int used_streams = streams;
 
         if (!are_streams_initialized) {
@@ -196,16 +196,18 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
         }
         auto to_send = capacity_first / streams;
         std::cout << "In each stream: " << to_send << std::endl;
-        for (int i = 0; i < streams; i++) {
-            auto x = quiche_conn_stream_send(conn_io->conn, 4 * i + 2,
-                                             reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
-                                             to_send, false);
-            if (x < 0) {
-                std::cout << "Error sending data" << std::endl;
-                return seastar::make_ready_future<>();
+        if (to_send > 0) {
+            for (int i = 0; i < streams; i++) {
+                auto x = quiche_conn_stream_send(conn_io->conn, 4 * i + 2,
+                                                 reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
+                                                 to_send, false);
+                if (x < 0) {
+                    std::cout << "Error sending data" << std::endl;
+                    return seastar::make_ready_future<>();
+                }
+                sent += x;
+                read_f += to_send;
             }
-            sent += x;
-            read_f += to_send;
         }
 
         std::cout << "Shard: " << seastar::this_shard_id() << std::endl;
@@ -224,18 +226,18 @@ seastar::future<> Client::handle_timeout() {
     quiche_conn_on_timeout(connection->conn);
     is_timer_active = false;
 
-    if (quiche_conn_is_closed(connection->conn)) {
-        quiche_stats stats;
-        quiche_path_stats path_stats;
-
-        quiche_conn_stats(connection->conn, &stats);
-        quiche_conn_path_stats(connection->conn, 0, &path_stats);
-
-        fprintf(stderr, "connection closed, recv=%zu sent=%zu lost=%zu rtt=%" PRIu64 "ns\n",
-                stats.recv, stats.sent, stats.lost, path_stats.rtt);
-
-        exit(1);
-    }
+//    if (quiche_conn_is_closed(connection->conn)) {
+//        quiche_stats stats;
+//        quiche_path_stats path_stats;
+//
+//        quiche_conn_stats(connection->conn, &stats);
+//        quiche_conn_path_stats(connection->conn, 0, &path_stats);
+//
+//        fprintf(stderr, "connection closed, recv=%zu sent=%zu lost=%zu rtt=%" PRIu64 "ns\n",
+//                stats.recv, stats.sent, stats.lost, path_stats.rtt);
+//
+//        exit(1);
+//    }
 
     return send_data(connection, channel, server_address);
 }
@@ -248,7 +250,7 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
     seastar::future<> f = seastar::make_ready_future<>();
 
 
-    while (true) {
+    for(int i = 0; i < 1; i++) {
         ssize_t written = quiche_conn_send(conn_data->conn, out, sizeof(out),
                                            &send_info);
         //std::cout << written << std::endl;
@@ -283,10 +285,14 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
         }
 
         // Wait for f to complete before sending the next packet.
+        std::cout << "Trying to send " << written << " bytes" << std::endl;
         f = f.then([this, &chan, &addr, p = std::move(p), written, &sleep_duration] () mutable {
             return seastar::sleep(sleep_duration).then([this, &chan, &addr, p = std::move(p), written] {
                 return chan.send(addr,
-                                 seastar::temporary_buffer<char>(p.get(), written));
+                                 seastar::temporary_buffer<char>(p.get(), written)).then([] {
+                                    std::cout << "Send!" << std::endl;
+                                    return seastar::make_ready_future<>();
+                                 });
             });
         });
     }
@@ -307,8 +313,9 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
 }
 
 seastar::future<> Client::receive() {
+    std::cout << "Receiving" << std::endl;
     return channel.receive().then([this](udp_datagram datagram) {
-
+        std::cout << "Received" << std::endl;
         uint8_t buffer[MAX_DATAGRAM_SIZE];
         auto fragment_array = datagram.get_data().fragment_array();
         memcpy(buffer, fragment_array->base, fragment_array->size);

@@ -12,6 +12,9 @@ QuicConnection::QuicConnection(std::vector<uint8_t> &&_cid, quiche_conn *_conn,
         peer_addr_len(_peer_addr_len),
         udp_send_queue(_udp_send_queue),
         channel(_udp_channel),
+        timer(([this] {
+            return handle_timeout();
+        })),
         is_timer_active(false),
         save_stream("saved_file.txt", std::ofstream::binary),
         received_bytes(0),
@@ -117,6 +120,18 @@ seastar::future<> QuicConnection::read_from_stream_and_append_to_file() {
     return seastar::make_ready_future<>();
 }
 
+void QuicConnection::handle_timeout(){
+    std::cerr << "timer expired\n";
+    (void ) timer_expired();
+
+}
+
+seastar::future<> QuicConnection::timer_expired(){
+    quiche_conn_on_timeout(conn);
+    is_timer_active = false;
+    return send_packets_out();
+}
+
 
 seastar::future<> QuicConnection::send_packets_out() {
     return seastar::repeat([this]() {
@@ -150,6 +165,11 @@ seastar::future<> QuicConnection::send_packets_out() {
             // Convert to chrono
             auto sleep_duration = std::chrono::seconds(diff.tv_sec) + std::chrono::nanoseconds(diff.tv_nsec);
 
+            // If negative, don't wait
+            if (sleep_duration.count() < 0) {
+                sleep_duration = std::chrono::seconds(0);
+            }
+
             return seastar::sleep(sleep_duration).then([this, send_info, p = std::move(p), written] {
 
                 sockaddr_in addr_in{};
@@ -168,19 +188,10 @@ seastar::future<> QuicConnection::send_packets_out() {
             // For some reason quiche_conn_timeout_* starts to return -1 (uint64_MAX)
             auto timeout = (int64_t) quiche_conn_timeout_as_millis(conn);
             if (timeout > 0) {
-                (void) seastar::sleep(std::chrono::milliseconds(timeout)).then([this]() {
-                    return handle_timeout();
-                });
+                timer.rearm(std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout), std::nullopt);
                 is_timer_active = true;
             }
         }
         return seastar::make_ready_future<>();
     });
-}
-
-
-seastar::future<> QuicConnection::handle_timeout() {
-    quiche_conn_on_timeout(conn);
-    is_timer_active = false;
-    return send_packets_out();
 }

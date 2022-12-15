@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/timer.hh>
 #include <quiche_utils.h>
 #include <fstream>
 
@@ -56,7 +57,8 @@ public:
     seastar::future<> receive_packet(uint8_t *receive_buffer, size_t receive_len, udp_datagram &datagram);
     seastar::future<> read_from_stream_and_append_to_file();
     seastar::future<> send_packets_out();
-    seastar::future<> handle_timeout();
+    seastar::future<> timer_expired();
+    void handle_timeout();
 
     size_t received_bytes_now;
     size_t received_bytes;

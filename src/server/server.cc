@@ -50,7 +50,7 @@ seastar::future<> Server::handle_datagram(udp_datagram &dgram) {
         fprintf(stderr, "failed to parse header: %d\n", rc);
         return seastar::make_ready_future<>();
     }
-    
+
     std::vector<uint8_t> map_key(header_info.dcid, header_info.dcid + header_info.dcid_len);
     if (clients.find(map_key) == clients.end()) {
         std::cerr << "NON_ESTABLISHED_CONNECTION...\n";
@@ -104,7 +104,7 @@ seastar::future<> Server::handle_pre_hs_connection(struct quic_header_info *info
     if (!connection_opt) {
         return seastar::make_ready_future<>();
     }
-    
+
     clients.emplace(connection_opt.value()->get_connection_id(), connection_opt.value());
     return handle_post_hs_connection(connection_opt.value(), datagram);
 }

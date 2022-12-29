@@ -2,17 +2,22 @@
 #include <cinttypes>
 #include <seastar/core/sleep.hh>
 
+
+
 QuicConnection::QuicConnection(std::vector<uint8_t> &&_cid, quiche_conn *_conn,
                                sockaddr_storage _peer_addr, socklen_t _peer_addr_len,
                                seastar::future<> &_udp_send_queue,
                                udp_channel &_udp_channel) :
-            cid(_cid),
-            conn(_conn),
-            peer_addr(_peer_addr),
-            peer_addr_len(_peer_addr_len),
-            udp_send_queue(_udp_send_queue),
-            channel(_udp_channel),
-            is_timer_active(false) {}
+        cid(_cid),
+        conn(_conn),
+        peer_addr(_peer_addr),
+        peer_addr_len(_peer_addr_len),
+        udp_send_queue(_udp_send_queue),
+        channel(_udp_channel),
+        timer(([this] {
+            return handle_timeout();
+        })),
+        is_timer_active(false) {}
 
 
 QuicConnection::~QuicConnection() {
@@ -21,10 +26,10 @@ QuicConnection::~QuicConnection() {
 
 
 std::optional<quic_connection_ptr> QuicConnection::from(quic_header_info *info, struct sockaddr *local_addr,
-                                                         socklen_t local_addr_len, struct sockaddr_storage *peer_addr,
-                                                         socklen_t peer_addr_len, quiche_config *config,
-                                                         seastar::future<> &server_send_udp_queue,
-                                                         udp_channel &server_udp_channel) {
+                                                        socklen_t local_addr_len, struct sockaddr_storage *peer_addr,
+                                                        socklen_t peer_addr_len, quiche_config *config,
+                                                        seastar::future<> &server_send_udp_queue,
+                                                        udp_channel &server_udp_channel) {
     if (info->scid_len != LOCAL_CONN_ID_LEN) {
         std::cerr << "Connection creation failed - scid length too short\n";
         return std::nullopt;
@@ -116,6 +121,18 @@ seastar::future<> QuicConnection::read_from_streams_and_echo() {
     return seastar::make_ready_future<>();
 }
 
+void QuicConnection::handle_timeout(){
+    std::cerr << "timer expired\n";
+    (void ) timer_expired();
+
+}
+
+seastar::future<> QuicConnection::timer_expired(){
+    quiche_conn_on_timeout(conn);
+    is_timer_active = false;
+    return send_packets_out();
+}
+
 
 seastar::future<> QuicConnection::send_packets_out() {
     return seastar::repeat([this] () {
@@ -135,14 +152,43 @@ seastar::future<> QuicConnection::send_packets_out() {
         std::unique_ptr<char> p(new char[written]);
         std::memcpy(p.get(), out, written);
 
-        udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, send_info] () {
+        udp_send_queue = udp_send_queue.then([this, p = std::move(p), written, send_info]  () mutable {
             std::cerr << "sending " << written << " bytes of data.\n";
 
-            sockaddr_in addr_in{};
-            memcpy(&addr_in, &send_info.to, send_info.to_len);
-            seastar::socket_address addr(addr_in);
+            auto timespec = send_info.at;
+            struct timespec diff{};
+            // Create instance of timespec for this moment
+            struct timespec now{};
+            clock_gettime(CLOCK_MONOTONIC, &now);
 
-            return channel.send(addr, seastar::temporary_buffer<char>(p.get(), written));
+            // Calculate difference between timespec and now
+
+            diff.tv_sec = timespec.tv_sec - now.tv_sec;
+            diff.tv_nsec = timespec.tv_nsec - now.tv_nsec;
+
+            // Print difference
+            std::cout << "Sleeping for " << timespec.tv_sec << " seconds and " << timespec.tv_nsec << " nanoseconds" << std::endl;
+            std::cout << "Sleeping for " << now.tv_sec << " seconds and " << now.tv_nsec << " nanoseconds" << std::endl;
+            std::cout << "Sleeping for " << diff.tv_sec << " seconds and " << diff.tv_nsec << " nanoseconds" << std::endl;
+
+            // Convert to chrono
+            auto sleep_duration = std::chrono::seconds(diff.tv_sec) + std::chrono::nanoseconds(diff.tv_nsec);
+
+            // If negative, don't wait
+            if (sleep_duration.count() < 0) {
+                sleep_duration = std::chrono::seconds(0);
+            }
+
+            return seastar::sleep(sleep_duration).then([this, send_info, p = std::move(p), written] {
+
+                sockaddr_in addr_in{};
+                memcpy(&addr_in, &send_info.to, send_info.to_len);
+                seastar::socket_address addr(addr_in);
+
+                return channel.send(addr,
+                                    seastar::temporary_buffer<char>(p.get(), written));
+            });
+
         });
 
         return seastar::make_ready_future<seastar::stop_iteration>(seastar::stop_iteration::no);
@@ -153,19 +199,14 @@ seastar::future<> QuicConnection::send_packets_out() {
             auto timeout = (int64_t) quiche_conn_timeout_as_millis(conn);
             if (timeout > 0) {
                 std::cerr << "Setting the timer for " << timeout << " millis.\n";
-                (void) seastar::sleep(std::chrono::milliseconds(timeout)).then([this] () {
-                    return handle_timeout();
-                });
+                timer.rearm(std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout), std::nullopt);
+//                (void) seastar::sleep(std::chrono::milliseconds(timeout)).then([this] () {
+//                    return handle_timeout();
+//                });
                 is_timer_active = true;
             }
         }
+
         return seastar::make_ready_future<>();
     });
-}
-
-
-seastar::future<> QuicConnection::handle_timeout() {
-    quiche_conn_on_timeout(conn);
-    is_timer_active = false;
-    return send_packets_out();
 }

@@ -5,17 +5,21 @@
 
 #include <seastar/core/app-template.hh>
 #include <seastar/util/log.hh>
-#include <client/client.h>
+//#include <client/client.h>
+#include "connected_socket/connected_client_socket.h"
 
 seastar::future<> submit_to_cores(std::uint16_t port, const char *host) {
     return seastar::parallel_for_each(boost::irange<unsigned>(0, seastar::smp::count),
                                       [port, host](unsigned core) {
                                           return seastar::smp::submit_to(core, [port, host] {
-                                              Client client(host, port);
-                                              client.client_setup_config();
-                                              return seastar::do_with(std::move(client), [](Client &client) {
+                                              connected_client_socket socket(host, port);
+                                              return seastar::do_with(std::move(socket), [](connected_client_socket &socket) {
                                                   std::cerr << "Running client loop...\n";
-                                                  return client.client_loop();
+                                                  return socket.connect().then([&socket] {
+                                                      (void) socket.write();
+
+                                                      return socket.loop();
+                                                  });
                                               });
                                           });
                                       });

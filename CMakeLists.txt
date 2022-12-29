@@ -56,6 +56,7 @@ list(APPEND
         CLIENT_SRC
         src/quiche_echo_client.cc
         src/client/client.cpp
+        include/connected_socket/connected_client_socket.h
         )
 add_executable(echo_client ${CLIENT_SRC})
 target_include_directories(echo_client PRIVATE ${INCLUDE_DIRS})

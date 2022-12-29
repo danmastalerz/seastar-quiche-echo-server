@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/timer.hh>
 #include <quiche_utils.h>
 
 #define LOCAL_CONN_ID_LEN 16
@@ -27,6 +28,7 @@ private:
     socklen_t peer_addr_len;
     seastar::future<> &udp_send_queue;
     udp_channel &channel;
+    seastar::timer<> timer;
     bool is_timer_active;
 
 
@@ -41,18 +43,24 @@ public:
 
     // static factory
     static std::optional<quic_connection_ptr> from(quic_header_info *info, sockaddr *local_addr,
-                                                    socklen_t local_addr_len, sockaddr_storage *peer_addr,
-                                                    socklen_t peer_addr_len, quiche_config *config,
-                                                    seastar::future<> &server_udp_send_queue,
-                                                    udp_channel &server_udp_channel);
+                                                   socklen_t local_addr_len, sockaddr_storage *peer_addr,
+                                                   socklen_t peer_addr_len, quiche_config *config,
+                                                   seastar::future<> &server_udp_send_queue,
+                                                   udp_channel &server_udp_channel);
 
     const std::vector<uint8_t> &get_connection_id();
+
     bool is_closed();
 
     seastar::future<> receive_packet(uint8_t *receive_buffer, size_t receive_len, udp_datagram &datagram);
+
     seastar::future<> read_from_streams_and_echo();
+
     seastar::future<> send_packets_out();
-    seastar::future<> handle_timeout();
+
+    seastar::future<> timer_expired();
+
+    void handle_timeout();
 
 };
 

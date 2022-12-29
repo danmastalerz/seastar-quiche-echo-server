@@ -33,14 +33,19 @@ Client::Client(const char *host, uint16_t port) :
         channel(seastar::make_udp_channel()),
         server_host(host),
         server_address(seastar::ipv4_addr(host, port)),
+        timer(([this] {
+            return handle_timeout();
+        })),
         is_timer_active(false),
+        input_buf(),
+        output_buf(),
         config(nullptr) {}
 
 void Client::client_setup_config() {
     setup_config(&config);
 }
 
-seastar::future<> Client::client_loop() {
+seastar::future<> Client::initialize() {
 
     std::cout << "starting client loop" << std::endl;
 
@@ -100,6 +105,10 @@ seastar::future<> Client::client_loop() {
 
     using namespace std::chrono_literals;
 
+    return seastar::make_ready_future<>();
+}
+
+seastar::future<> Client::client_loop() {
     return send_data(connection, channel, server_address)
             .then([this]() {
                 return seastar::keep_doing(
@@ -107,7 +116,6 @@ seastar::future<> Client::client_loop() {
                             return receive();
                         });
             });
-
 }
 
 seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct conn_io *conn_io, udp_channel &channel,
@@ -121,7 +129,6 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 
     sockaddr local_addr = channel.local_address().as_posix_sockaddr();
     socklen_t local_addr_len = sizeof(local_addr);
-
 
     if (read < 0) {
 
@@ -148,7 +155,7 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 
     if (quiche_conn_is_closed(conn_io->conn)) {
         fprintf(stderr, "connection closed\n");
-        return handle_timeout();
+        return timer_expired();
     }
 
     if (quiche_conn_is_established(conn_io->conn)) {
@@ -167,7 +174,11 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
                 break;
             }
 
-            printf("%.*s", (int) recv_len, buf);
+//            std::string tmp(reinterpret_cast<const char *>(buf));
+//            std::cout << "RECEIVED: " << tmp << " " << recv_len<<std::endl;
+//            (void) output_buf.push_output(tmp.c_str(), recv_len);
+
+            printf("received from the server: %.*s \n", (int) recv_len, buf);
             echo_received = true;
 
             if (fin) {
@@ -189,26 +200,37 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
 
         if (echo_received) {
             // Get line from the user.
-            char line_user[1024];
-            fprintf(stderr, "Enter text to send: \n");
-            fgets(line_user, sizeof(line_user), stdin);
+//            char line_user[1024];
+//            fprintf(stderr, "Enter text to send: \n");
+//            fgets(line_user, sizeof(line_user), stdin);
 
-            auto *line = (uint8_t *) line_user;
+            if (!input_buf.empty()) {
+                auto input = input_buf.send_input();
+                auto *line = (uint8_t *) input.get();
 
-            if (quiche_conn_stream_send(conn_io->conn, 4, line, strlen(line_user) + 1, false) < 0) {
-                return seastar::make_ready_future<>();
+                if (quiche_conn_stream_send(conn_io->conn, 4, line, strlen(input.get()) + 1, false) < 0) {
+                    return seastar::make_ready_future<>();
+                }
+                echo_received = false;
             }
-            echo_received = false;
         }
     }
 
     return send_data(conn_io, channel, addr);
 }
 
-seastar::future<> Client::handle_timeout() {
-    quiche_conn_on_timeout(connection->conn);
-    std::cout << "getting timeout " << std::endl;
+
+void Client::handle_timeout() {
+    std::cerr << "timer expired\n";
+    (void) timer_expired();
+}
+
+// proper seastar timer handling currently ignored
+seastar::future<> Client::timer_expired() {
+
+//    quiche_conn_on_timeout(connection->conn);
     is_timer_active = false;
+    return seastar::make_ready_future<>();
 
     if (quiche_conn_is_closed(connection->conn)) {
         quiche_stats stats;
@@ -225,15 +247,18 @@ seastar::future<> Client::handle_timeout() {
 
     return send_data(connection, channel, server_address);
 }
+
 seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan, seastar::ipv4_addr &addr) {
     uint8_t out[MAX_DATAGRAM_SIZE];
 
     quiche_send_info send_info;
 
-    while (true) {
+    seastar::future<> f = seastar::make_ready_future<>();
 
+    while (true) {
         ssize_t written = quiche_conn_send(conn_data->conn, out, sizeof(out),
                                            &send_info);
+        std::cout << written << std::endl;
 
         if (written == QUICHE_ERR_DONE) {
             break;
@@ -244,34 +269,57 @@ seastar::future<> Client::send_data(struct conn_io *conn_data, udp_channel &chan
             exit(1);
         }
 
-        std::cout << "sending " << written << " bytes" << std::endl;
+        std::unique_ptr<char> p(new char[written]);
+        std::memcpy(p.get(), out, written);
 
-        (void) chan.send(addr,
-                         seastar::temporary_buffer<char>(reinterpret_cast<const char *>(out), written));
+        auto timespec = send_info.at;
+        struct timespec diff{};
+        // Create instance of timespec for this moment
+        struct timespec now{};
+        clock_gettime(CLOCK_MONOTONIC, &now);
 
+        // Calculate difference between timespec and now
+
+        diff.tv_sec = timespec.tv_sec - now.tv_sec;
+        diff.tv_nsec = timespec.tv_nsec - now.tv_nsec;
+
+        // Print difference
+        std::cout << "Sleeping for " << timespec.tv_sec << " seconds and " << timespec.tv_nsec << " nanoseconds"
+                  << std::endl;
+        std::cout << "Sleeping for " << now.tv_sec << " seconds and " << now.tv_nsec << " nanoseconds" << std::endl;
+        std::cout << "Sleeping for " << diff.tv_sec << " seconds and " << diff.tv_nsec << " nanoseconds" << std::endl;
+
+        // Convert to chrono
+        auto sleep_duration = std::chrono::seconds(diff.tv_sec) + std::chrono::nanoseconds(diff.tv_nsec);
+
+        // If negative, don't wait
+        if (sleep_duration.count() < 0) {
+            sleep_duration = std::chrono::seconds(0);
+        }
+
+        // Wait for f to complete before sending the next packet.
+        f = f.then([this, &chan, &addr, p = std::move(p), written, &sleep_duration]() mutable {
+            return seastar::sleep(sleep_duration).then([this, &chan, &addr, p = std::move(p), written] {
+                return chan.send(addr,
+                                 seastar::temporary_buffer<char>(p.get(), written));
+            });
+        });
     }
-
-    std::cout << "if closed " << quiche_conn_is_closed(conn_data->conn) << std::endl;
-
 
     if (!is_timer_active) {
         auto timeout = (int64_t) quiche_conn_timeout_as_millis(conn_data->conn);
-
-
         if (timeout > 0) {
             std::cerr << "Setting the timer for " << timeout << " millis.\n";
-            (void) seastar::sleep(std::chrono::milliseconds(timeout)).then([this] () {
-                return handle_timeout();
-            });
+            timer.rearm(std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout), std::nullopt);
             is_timer_active = true;
         }
     }
-    return seastar::make_ready_future<>();
+
+    return f;
 }
 
 seastar::future<> Client::receive() {
     return channel.receive().then([this](udp_datagram datagram) {
-
         uint8_t buffer[MAX_DATAGRAM_SIZE];
         auto fragment_array = datagram.get_data().fragment_array();
         memcpy(buffer, fragment_array->base, fragment_array->size);
@@ -281,3 +329,12 @@ seastar::future<> Client::receive() {
     });
 }
 
+seastar::future<> Client::write_input(const std::string &msg, size_t written) {
+    return input_buf.push_input(msg.c_str(), written);
+}
+
+seastar::future<seastar::temporary_buffer<char>> Client::read_output() {
+    auto buf = output_buf.read_output();
+    return seastar::make_ready_future<seastar::temporary_buffer<char>>(buf.first.c_str(), buf.second);
+
+}

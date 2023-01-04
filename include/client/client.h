@@ -7,7 +7,9 @@
 
 #include <seastar/core/reactor.hh>
 #include <fstream>
+#include <utility>
 #include <vector>
+#include "stream/stream.h"
 
 using namespace seastar::net;
 
@@ -21,8 +23,8 @@ private:
     bool is_timer_active;
     std::string file;
     std::ifstream fin;
-    std::vector<char> send_file_buffer;
     bool are_streams_initialized;
+    input input_stream;
 
     seastar::future<> handle_timeout();
 
@@ -34,13 +36,17 @@ private:
 
     seastar::future<> receive();
 
-
 public:
     explicit Client(const char *host, std::uint16_t port, std::string file, int core);
 
     void client_setup_config();
 
+    seastar::future<> initialize();
+
     seastar::future<> client_loop();
+
+    seastar::future<> pass_data(const std::vector<char>& source);
+
     int core;
 
 };

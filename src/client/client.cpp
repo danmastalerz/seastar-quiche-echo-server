@@ -46,19 +46,21 @@ Client::Client(const char *host, uint16_t port, std::string file, int core) :
         core(core),
         fin(file, std::ifstream::binary),
         are_streams_initialized(false),
-        send_file_buffer(std::vector<char>(FILE_CHUNK)) {}
+        input_stream() {}
 
 void Client::client_setup_config() {
     setup_config(&config);
 }
 
-seastar::future<> Client::client_loop() {
+seastar::future<> Client::initialize() {
 
+    std::cout << "starting client loop" << std::endl;
 
     if (config == nullptr) {
         std::cerr << "Failed to setup quiche configuration...";
         return seastar::make_ready_future<>();
     }
+    std::cerr << "Config setup successful.\n";
 
 
     uint8_t scid[LOCAL_CONN_ID_LEN];
@@ -78,6 +80,7 @@ seastar::future<> Client::client_loop() {
     conn_data = (conn_io *) calloc(1, sizeof(conn_io));
 
     if (conn_data == nullptr) {
+        fprintf(stderr, "failed to allocate connection IO\n");
         return seastar::make_ready_future<>();
     }
 
@@ -91,6 +94,7 @@ seastar::future<> Client::client_loop() {
 
     connection = (conn_io *) calloc(1, sizeof(conn_io));
     if (connection == nullptr) {
+        fprintf(stderr, "failed to allocate connection IO\n");
     }
 
     quiche_conn *conn = quiche_connect(server_host, (const uint8_t *) scid, sizeof(scid),
@@ -99,6 +103,7 @@ seastar::future<> Client::client_loop() {
                                        (struct sockaddr *) &peer_addr, peer_addr_len,
                                        config);
     if (conn == nullptr) {
+        fprintf(stderr, "failed to create connection\n");
     }
     connection->conn = conn;
 
@@ -106,6 +111,11 @@ seastar::future<> Client::client_loop() {
     connection->peer_addr_len = peer_addr_len;
 
     using namespace std::chrono_literals;
+
+    return seastar::make_ready_future<>();
+}
+
+seastar::future<> Client::client_loop() {
 
     return send_data(connection, channel, server_address)
             .then([this]() {
@@ -197,15 +207,35 @@ seastar::future<> Client::handle_connection(uint8_t *buf, ssize_t read, struct c
         auto to_send = capacity_first / streams;
         std::cout << "In each stream: " << to_send << std::endl;
         for (int i = 0; i < streams; i++) {
-            auto x = quiche_conn_stream_send(conn_io->conn, 4 * i + 2,
-                                             reinterpret_cast<const uint8_t *>(send_file_buffer.data()),
-                                             to_send, false);
-            if (x < 0) {
-                std::cout << "Error sending data" << std::endl;
-                return seastar::make_ready_future<>();
-            }
-            sent += x;
-            read_f += to_send;
+
+            auto f = seastar::make_ready_future<>();
+
+            f = f.then([&to_send, this, &conn_io, &i, &channel] {
+                return input_stream.read_exactly(FILE_CHUNK).then([this, &conn_io, &to_send, &i] (seastar::temporary_buffer<char> buf) {
+
+                    auto x = quiche_conn_stream_send(conn_io->conn, 4 * i + 2,
+                                                     reinterpret_cast<const uint8_t *>(buf.get()),
+                                                     to_send, false);
+                    if (x < 0) {
+                        std::cout << "Error sending data" << std::endl;
+                        return seastar::make_ready_future<>();
+                    }
+                    sent += x;
+                    read_f += to_send;
+                    return seastar::make_ready_future<>();
+                });
+//                    auto bbb = input_stream.send_buffer();
+//                auto x = quiche_conn_stream_send(conn_io->conn, 4 * i + 2,
+//                                                 reinterpret_cast<const uint8_t *>(bbb.data()),
+//                                                 to_send, false);
+//                if (x < 0) {
+//                    std::cout << "Error sending data" << std::endl;
+//                    return seastar::make_ready_future<>();
+//                }
+//                sent += x;
+//                read_f += to_send;
+//                return seastar::make_ready_future<>();
+            });
         }
 
         std::cout << "Shard: " << seastar::this_shard_id() << std::endl;
@@ -318,3 +348,7 @@ seastar::future<> Client::receive() {
     });
 }
 
+seastar::future<> Client::pass_data(const std::vector<char>& source) {
+    std::cerr << "Keep...\n";
+    return input_stream.pass_data(source);
+}
